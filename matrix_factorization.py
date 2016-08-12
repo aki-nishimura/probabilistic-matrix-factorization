@@ -55,7 +55,7 @@ class MatrixFactorization(object):
 
         # Update 'c' and 'v' block-wise in parallel.
         if num_process == 1:
-            ru = self.update_row_param_blockwise(self.y_csr, phi_csr, mu0, c, v, r_prev, u_prev)
+            r, u = self.update_row_param_blockwise(self.y_csr, phi_csr, mu0, c, v, r_prev, u_prev)
         else:
             n_block = num_process
             block_ind = np.linspace(0, nrow, 1 + n_block, dtype=int)
@@ -65,10 +65,9 @@ class MatrixFactorization(object):
                                                    mu0, c, v,
                                                    r_prev[block_ind[m]:block_ind[m + 1]],
                                                    u_prev[block_ind[m]:block_ind[m + 1]])
-            for m in range(n_block))
-
-        r = np.concatenate([ru_i[0] for ru_i in ru])
-        u = np.vstack([ru_i[1] for ru_i in ru])
+                for m in range(n_block))
+            r = np.concatenate([ru_i[0] for ru_i in ru])
+            u = np.vstack([ru_i[1] for ru_i in ru])
 
         return r, u
 
@@ -111,7 +110,7 @@ class MatrixFactorization(object):
         ncol = self.y_csc.shape[1]
 
         if num_process == 1:
-            cv = self.update_col_param_blockwise(self.y_csc, phi_csc, mu0, r, u, c_prev, v_prev)
+            c, v = self.update_col_param_blockwise(self.y_csc, phi_csc, mu0, r, u, c_prev, v_prev)
         else:
             # Update 'c' and 'v' block-wise in parallel.
             n_block = num_process
@@ -123,9 +122,8 @@ class MatrixFactorization(object):
                                                    c_prev[block_ind[m]:block_ind[m + 1]],
                                                    v_prev[block_ind[m]:block_ind[m + 1]])
                 for m in range(n_block))
-
-        c = np.concatenate([cv_j[0] for cv_j in cv])
-        v = np.vstack([cv_j[1] for cv_j in cv])
+            c = np.concatenate([cv_j[0] for cv_j in cv])
+            v = np.vstack([cv_j[1] for cv_j in cv])
 
         return c, v
 
