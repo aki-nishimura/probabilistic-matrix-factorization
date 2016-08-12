@@ -7,9 +7,9 @@ import joblib
 
 class MatrixFactorization(object):
 
-    def __init__(self, y_coo, num_factor, reg_bias, reg_factor, dispersion=None):
-        if dispersion is None:
-            dispersion = np.ones(y_coo.data.size)
+    def __init__(self, y_coo, num_factor, reg_bias, reg_factor, weight=None):
+        if weight is None:
+            weight = np.ones(y_coo.data.size)
 
         self.y_coo = y_coo
         self.y_csr = scipy.sparse.csr_matrix(y_coo)
@@ -19,7 +19,7 @@ class MatrixFactorization(object):
             'col_bias_prec': reg_bias,
             'row_bias_prec': reg_bias,
             'factor_prec': reg_factor,
-            'dispersion': dispersion,
+            'weight': weight,
             'df': 5.0,
         }
 
@@ -30,13 +30,12 @@ class MatrixFactorization(object):
         mu0 = np.random.normal(post_mean, 1 / math.sqrt(post_prec))
         return mu0
 
-    def update_dispersion_param(self, mu0, r, u, c, v):
-        # Returns the (inverse) dispersion parameters in an 1-D array in the row
-        # major order and also the mean estimate of matrix factorization as a
-        # by-product.
+    def update_weight_param(self, mu0, r, u, c, v):
+        # Returns the weight parameters in an 1-D array in the row major order
+        # and also the mean estimate of matrix factorization as a by-product.
 
         prior_shape = self.prior_param['df'] / 2
-        prior_rate = self.prior_param['df'] * self.prior_param['dispersion'] / 2
+        prior_rate = self.prior_param['df'] / 2 / self.prior_param['weight']
 
         i = self.y_coo.row
         j = self.y_coo.col
@@ -188,7 +187,7 @@ class MatrixFactorization(object):
         u = np.zeros((nrow, self.num_factor))
         c = np.zeros(ncol)
         v = np.zeros((ncol, self.num_factor))
-        phi = 1 / self.prior_param['dispersion']
+        phi = self.prior_param['weight']
         mu_wo_intercept = np.zeros(self.y_coo.nnz)
 
         # Gibbs steps
@@ -199,12 +198,12 @@ class MatrixFactorization(object):
             r, u = self.update_row_param(phi_csr, mu0, c, v, r, u, num_process)
             phi_csc = scipy.sparse.csc_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
             c, v = self.update_col_param(phi_csc, mu0, r, u, c, v, num_process)
-            phi, mu = self.update_dispersion_param(mu0, r, u, c, v)
+            phi, mu = self.update_weight_param(mu0, r, u, c, v)
             mu_wo_intercept = mu - mu0
 
-            # Compute the log posterior (with the dispersion parameter marginalized out)
+            # Compute the log posterior (with the weight parameter marginalized out)
             logp_samples[i] = - (self.prior_param['df'] + 1) / 2 * np.sum(
-                np.log(1 + (self.y_coo.data - mu) ** 2 / self.prior_param['df'] / self.prior_param['dispersion'])) + \
+                np.log(1 + (self.y_coo.data - mu) ** 2 * self.prior_param['weight'] / self.prior_param['df'])) + \
                               - self.prior_param['col_bias_prec'] / 2 * np.sum(c ** 2) + \
                               - self.prior_param['row_bias_prec'] / 2 * np.sum(v ** 2, (0, 1)) + \
                               - self.prior_param['factor_prec']  / 2 * np.sum(r ** 2) + \
