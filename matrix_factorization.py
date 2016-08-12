@@ -1,9 +1,9 @@
 import numpy as np
 import scipy as scipy
 import scipy.linalg
-import scipy.sparse as sparse
-from joblib import Parallel, delayed
-from math import sqrt, floor
+import scipy.sparse
+import math
+import joblib
 
 class MatrixFactorization(object):
 
@@ -12,8 +12,8 @@ class MatrixFactorization(object):
             dispersion = np.ones(y_coo.data.size)
 
         self.y_coo = y_coo
-        self.y_csr = sparse.csr_matrix(y_coo)
-        self.y_csc = sparse.csc_matrix(y_coo)
+        self.y_csr = scipy.sparse.csr_matrix(y_coo)
+        self.y_csc = scipy.sparse.csc_matrix(y_coo)
         self.num_factor = num_factor
         self.prior_param = {
             'col_bias_prec': reg_bias,
@@ -27,7 +27,7 @@ class MatrixFactorization(object):
         post_prec = np.sum(phi)
         residual = self.y_coo.data - mu_wo_intercept
         post_mean = np.sum(phi * residual) / post_prec
-        mu0 = np.random.normal(post_mean, 1 / sqrt(post_prec))
+        mu0 = np.random.normal(post_mean, 1 / math.sqrt(post_prec))
         return mu0
 
     def update_dispersion_param(self, mu0, r, u, c, v):
@@ -60,8 +60,8 @@ class MatrixFactorization(object):
         else:
             n_block = num_process
             block_ind = np.linspace(0, nrow, 1 + n_block, dtype=int)
-            ru = Parallel(n_jobs=num_process)(
-                delayed(self.update_row_param_blockwise)(self.y_csr[block_ind[m]:block_ind[m + 1], :],
+            ru = joblib.Parallel(n_jobs=num_process)(
+                joblib.delayed(self.update_row_param_blockwise)(self.y_csr[block_ind[m]:block_ind[m + 1], :],
                                                    phi_csr[block_ind[m]:block_ind[m + 1], :],
                                                    mu0, c, v,
                                                    r_prev[block_ind[m]:block_ind[m + 1]],
@@ -99,8 +99,8 @@ class MatrixFactorization(object):
         C, lower = scipy.linalg.cho_factor(post_Phi_i)
         post_mean_i = scipy.linalg.cho_solve((C, lower), post_mean_i)
         # Generate Gaussian, recycling the Cholesky factorization from the posterior mean computation.
-        ru_i = sqrt(1 - self.relaxation ** 2) * scipy.linalg.solve_triangular(C, np.random.randn(len(post_mean_i)),
-                                                                              lower=lower)
+        ru_i = math.sqrt(1 - self.relaxation ** 2) * scipy.linalg.solve_triangular(C, np.random.randn(len(post_mean_i)),
+                                                                                   lower=lower)
         ru_i += post_mean_i + self.relaxation * (post_mean_i - np.concatenate(([r_prev_i], u_prev_i)))
         r_i = ru_i[0]
         u_i = ru_i[1:]
@@ -117,8 +117,8 @@ class MatrixFactorization(object):
             # Update 'c' and 'v' block-wise in parallel.
             n_block = num_process
             block_ind = np.linspace(0, ncol, 1 + n_block, dtype=int)
-            cv = Parallel(n_jobs=num_process)(
-                delayed(self.update_col_param_blockwise)(self.y_csc[:, block_ind[m]:block_ind[m + 1]],
+            cv = joblib.Parallel(n_jobs=num_process)(
+                joblib.delayed(self.update_col_param_blockwise)(self.y_csc[:, block_ind[m]:block_ind[m + 1]],
                                                    phi_csc[:, block_ind[m]:block_ind[m + 1]],
                                                    mu0, r, u,
                                                    c_prev[block_ind[m]:block_ind[m + 1]],
@@ -158,7 +158,7 @@ class MatrixFactorization(object):
         C, lower = scipy.linalg.cho_factor(post_Phi_j)
         post_mean_j = scipy.linalg.cho_solve((C, lower), post_mean_j)
         # Generate Gaussian, recycling the Cholesky factorization from the posterior mean computation.
-        cv_j = sqrt(1 - self.relaxation ** 2) * scipy.linalg.solve_triangular(C, np.random.randn(len(post_mean_j)),
+        cv_j = math.sqrt(1 - self.relaxation ** 2) * scipy.linalg.solve_triangular(C, np.random.randn(len(post_mean_j)),
                                                                               lower=lower)
         cv_j += post_mean_j + self.relaxation * (post_mean_j - np.concatenate(([c_prev_j], v_prev_j)))
         c_j = cv_j[0]
@@ -171,7 +171,7 @@ class MatrixFactorization(object):
         np.random.seed(seed)
         self.relaxation = relaxation  # Recovers the standard Gibbs sampler when relaxation = 0.
 
-        n_iter_per_update = max(1, floor((n_burnin + n_mcmc) / n_update))
+        n_iter_per_update = max(1, math.floor((n_burnin + n_mcmc) / n_update))
         nrow, ncol = self.y_coo.shape
 
         # Pre-allocate
@@ -195,9 +195,9 @@ class MatrixFactorization(object):
         for i in range(n_burnin + n_mcmc):
 
             mu0 = self.update_intercept(phi, mu_wo_intercept)
-            phi_csr = sparse.csr_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
+            phi_csr = scipy.sparse.csr_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
             r, u = self.update_row_param(phi_csr, mu0, c, v, r, u, num_process)
-            phi_csc = sparse.csc_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
+            phi_csc = scipy.sparse.csc_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
             c, v = self.update_col_param(phi_csc, mu0, r, u, c, v, num_process)
             phi, mu = self.update_dispersion_param(mu0, r, u, c, v)
             mu_wo_intercept = mu - mu0
@@ -263,8 +263,8 @@ class MatrixFactorization(object):
             C, lower = scipy.linalg.cho_factor(post_Phi_i)
             post_mean_i = scipy.linalg.cho_solve((C, lower), post_mean_i)
             # Generate Gaussian, recycling the Cholesky factorization from the posterior mean computation.
-            ru_i = sqrt(1 - self.relaxation ** 2) * scipy.linalg.solve_triangular(C, np.random.randn(len(post_mean_i)),
-                                                                                  lower=lower)
+            ru_i = math.sqrt(1 - self.relaxation ** 2) * scipy.linalg.solve_triangular(C, np.random.randn(len(post_mean_i)),
+                                                                                       lower=lower)
             ru_i += post_mean_i + self.relaxation * (post_mean_i - np.concatenate(([r_prev[i]], u_prev[i, :])))
             r[i] = ru_i[0]
             u[i, :] = ru_i[1:]
@@ -299,8 +299,8 @@ class MatrixFactorization(object):
             C, lower = scipy.linalg.cho_factor(post_Phi_j)
             post_mean_j = scipy.linalg.cho_solve((C, lower), post_mean_j)
             # Generate Gaussian, recycling the Cholesky factorization from the posterior mean computation.
-            cv_j = sqrt(1 - self.relaxation ** 2) * scipy.linalg.solve_triangular(C, np.random.randn(len(post_mean_j)),
-                                                                                  lower=lower)
+            cv_j = math.sqrt(1 - self.relaxation ** 2) * scipy.linalg.solve_triangular(C, np.random.randn(len(post_mean_j)),
+                                                                                       lower=lower)
             cv_j += post_mean_j + self.relaxation * (post_mean_j - np.concatenate(([c_prev[j]], v_prev[j, :])))
             c[j] = cv_j[0]
             v[j, :] = cv_j[1:]
