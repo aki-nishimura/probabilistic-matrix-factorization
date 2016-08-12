@@ -204,11 +204,11 @@ class MatrixFactorization(object):
 
             # Compute the log posterior (with the dispersion parameter marginalized out)
             logp_samples[i] = - (self.prior_param['df'] + 1) / 2 * np.sum(
-                np.log(1 + (self.y_coo.data - mu) ** 2 / self.prior_param['df'] / self.prior_param['dispersion']) + \
+                np.log(1 + (self.y_coo.data - mu) ** 2 / self.prior_param['df'] / self.prior_param['dispersion'])) + \
                               - self.prior_param['col_bias_prec'] / 2 * np.sum(c ** 2) + \
                               - self.prior_param['row_bias_prec'] / 2 * np.sum(v ** 2, (0, 1)) + \
                               - self.prior_param['factor_prec']  / 2 * np.sum(r ** 2) + \
-                              - self.prior_param['factor_prec'] / 2 * np.sum(u ** 2, (0, 1)))
+                              - self.prior_param['factor_prec'] / 2 * np.sum(u ** 2, (0, 1))
 
             if i >= n_burnin:
                 index = i - n_burnin
@@ -234,8 +234,6 @@ class MatrixFactorization(object):
         }
 
         return post_mean_mu, sample_dict
-
-
 
     # Old functions for row and column parameter updates. Saved in case it is easier to cythonize.
     def for_loop_update_row_param_blockwise(self, y_csr, phi_csr, mu0, c, v, r_prev, u_prev):
