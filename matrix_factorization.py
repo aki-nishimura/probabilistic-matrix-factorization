@@ -23,6 +23,28 @@ class MatrixFactorization(object):
             'df': 5.0,
         }
 
+    @staticmethod
+    def prepare_matrix(val, row_var, col_var):
+        # Takes a vector of observed values and two categorical variables
+        # and returns a sparse matrix in coo format that can be used to
+        # instantiate the class.
+        #
+        # Params:
+        # val, row_var, col_var: numpy arrays
+
+        row_id = row_var.unique()
+        col_id = col_var.unique()
+        nrow = row_id.size
+        ncol = col_id.size
+
+        # Associate each of the unique id names to a row and column index.
+        row_id_map = {row_id[index]: index for index in range(len(row_id))}
+        col_id_map = {col_id[index]: index for index in range(len(col_id))}
+
+        row_indices = np.array([row_id_map[id] for id in row_var])
+        col_indices = np.array([col_id_map[id] for id in col_var])
+        return scipy.sparse.coo_matrix((val, (row_indices, col_indices)), shape=(nrow, ncol))
+
     def update_intercept(self, phi, mu_wo_intercept):
         post_prec = np.sum(phi)
         residual = self.y_coo.data - mu_wo_intercept
