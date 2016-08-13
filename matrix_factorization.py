@@ -55,7 +55,7 @@ class MatrixFactorization(object):
 
         # Update 'c' and 'v' block-wise in parallel.
         if num_process == 1:
-            ru = self.update_row_param_blockwise(self.y_csr, phi_csr, mu0, c, v, r_prev, u_prev)
+            r, u = self.update_row_param_blockwise(self.y_csr, phi_csr, mu0, c, v, r_prev, u_prev)
         else:
             n_block = num_process
             block_ind = np.linspace(0, nrow, 1 + n_block, dtype=int)
@@ -65,10 +65,9 @@ class MatrixFactorization(object):
                                                    mu0, c, v,
                                                    r_prev[block_ind[m]:block_ind[m + 1]],
                                                    u_prev[block_ind[m]:block_ind[m + 1]])
-            for m in range(n_block))
-
-        r = np.concatenate([ru_i[0] for ru_i in ru])
-        u = np.vstack([ru_i[1] for ru_i in ru])
+                for m in range(n_block))
+            r = np.concatenate([ru_i[0] for ru_i in ru])
+            u = np.vstack([ru_i[1] for ru_i in ru])
 
         return r, u
 
@@ -77,19 +76,22 @@ class MatrixFactorization(object):
         nrow = y_csr.shape[0]
         prior_Phi = np.diag(np.hstack((self.prior_param['row_bias_prec'],
                                        np.tile(self.prior_param['factor_prec'], self.num_factor))))
-
-        ru = [self.update_per_row(y_csr[i, :], phi_csr[i, :], mu0, c, v, r_prev[i], u_prev[i,:], prior_Phi) for i in range(nrow)]
+        indptr = y_csr.indptr
+        ru = [self.update_per_row(y_csr.data[indptr[i]:indptr[i+1]],
+                                  phi_csr.data[indptr[i]:indptr[i+1]],
+                                  y_csr.indices[indptr[i]:indptr[i+1]],
+                                  mu0, c, v, r_prev[i], u_prev[i,:], prior_Phi) for i in range(nrow)]
         r = np.array([ru_i[0] for ru_i in ru])
         u = np.vstack([ru_i[1] for ru_i in ru])
 
         return r, u
 
-    def update_per_row(self, y_csr, phi_csr, mu0, c, v, r_prev_i, u_prev_i, prior_Phi):
+    def update_per_row(self, y_i, phi_i, J, mu0, c, v, r_prev_i, u_prev_i, prior_Phi):
+        # Params:
+        #   J - column indices
 
-        J = y_csr.indices
         nnz_i = len(J)
-        residual_i = y_csr.data - mu0 - c[J]
-        phi_i = phi_csr.data
+        residual_i = y_i - mu0 - c[J]
         v_T = np.hstack((np.ones((nnz_i, 1)), v[J, :]))
         post_Phi_i = prior_Phi + \
                      np.dot(v_T.T,
@@ -111,7 +113,7 @@ class MatrixFactorization(object):
         ncol = self.y_csc.shape[1]
 
         if num_process == 1:
-            cv = self.update_col_param_blockwise(self.y_csc, phi_csc, mu0, r, u, c_prev, v_prev)
+            c, v = self.update_col_param_blockwise(self.y_csc, phi_csc, mu0, r, u, c_prev, v_prev)
         else:
             # Update 'c' and 'v' block-wise in parallel.
             n_block = num_process
@@ -123,9 +125,8 @@ class MatrixFactorization(object):
                                                    c_prev[block_ind[m]:block_ind[m + 1]],
                                                    v_prev[block_ind[m]:block_ind[m + 1]])
                 for m in range(n_block))
-
-        c = np.concatenate([cv_j[0] for cv_j in cv])
-        v = np.vstack([cv_j[1] for cv_j in cv])
+            c = np.concatenate([cv_j[0] for cv_j in cv])
+            v = np.vstack([cv_j[1] for cv_j in cv])
 
         return c, v
 
@@ -135,24 +136,24 @@ class MatrixFactorization(object):
         prior_Phi = np.diag(np.hstack((self.prior_param['col_bias_prec'],
                                        np.tile(self.prior_param['factor_prec'], self.num_factor))))
 
-        cv = [self.update_per_col(y_csc[:, j], phi_csc[:, j], mu0, r, u, c_prev[j], v_prev[j,:], prior_Phi) for j in range(ncol)]
+        indptr = y_csc.indptr
+        cv = [self.update_per_col(y_csc.data[indptr[j]:indptr[j+1]],
+                                  phi_csc.data[indptr[j]:indptr[j+1]],
+                                  y_csc.indices[indptr[j]:indptr[j+1]],
+                                  mu0, r, u, c_prev[j], v_prev[j,:], prior_Phi) for j in range(ncol)]
         c = np.array([cv_j[0] for cv_j in cv])
         v = np.vstack([cv_j[1] for cv_j in cv])
 
         return c, v
 
-    def update_per_col(self, y_csc, phi_csc, mu0, r, u, c_prev_j, v_prev_j, prior_Phi):
+    def update_per_col(self, y_j, phi_j, I, mu0, r, u, c_prev_j, v_prev_j, prior_Phi):
 
-        num_factor = u.shape[1]
-
-        I = y_csc.indices
         nnz_j = len(I)
-        residual_j = y_csc.data - mu0 - r[I]
-        phi_j = phi_csc.data
+        residual_j = y_j - mu0 - r[I]
         u_T = np.hstack((np.ones((nnz_j, 1)), u[I, :]))
         post_Phi_j = prior_Phi + \
                      np.dot(u_T.T,
-                            np.tile(phi_j[:, np.newaxis], (1, 1 + num_factor)) * u_T)  # Weighted sum of u_i * u_i.T
+                            np.tile(phi_j[:, np.newaxis], (1, 1 + self.num_factor)) * u_T)  # Weighted sum of u_i * u_i.T
         post_mean_j = np.squeeze(np.dot(phi_j * residual_j, u_T))
         C, lower = scipy.linalg.cho_factor(post_Phi_j)
         post_mean_j = scipy.linalg.cho_solve((C, lower), post_mean_j)
