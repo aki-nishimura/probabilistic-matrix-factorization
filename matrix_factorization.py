@@ -7,7 +7,8 @@ import joblib
 
 class MatrixFactorization(object):
 
-    def __init__(self, y_coo, num_factor, reg_bias, reg_factor, weight=None):
+    def __init__(self, y_coo, num_factor, bias_scale, factor_scale, weight=None):
+
         if weight is None:
             weight = np.ones(y_coo.data.size)
 
@@ -16,9 +17,9 @@ class MatrixFactorization(object):
         self.y_csc = scipy.sparse.csc_matrix(y_coo)
         self.num_factor = num_factor
         self.prior_param = {
-            'col_bias_prec': reg_bias,
-            'row_bias_prec': reg_bias,
-            'factor_prec': reg_factor,
+            'col_bias_scale': bias_scale,
+            'row_bias_scale': bias_scale,
+            'factor_scale': factor_scale,
             'weight': weight,
             'df': 5.0,
         }
@@ -46,6 +47,7 @@ class MatrixFactorization(object):
         return scipy.sparse.coo_matrix((val, (row_indices, col_indices)), shape=(nrow, ncol))
 
     def update_intercept(self, phi, mu_wo_intercept):
+
         post_prec = np.sum(phi)
         residual = self.y_coo.data - mu_wo_intercept
         post_mean = np.sum(phi * residual) / post_prec
@@ -73,7 +75,6 @@ class MatrixFactorization(object):
     def update_row_param(self, phi_csr, mu0, c, v, r_prev, u_prev, num_process):
 
         nrow = self.y_csr.shape[0]
-        num_factor = v.shape[1]
 
         # Update 'c' and 'v' block-wise in parallel.
         if num_process == 1:
@@ -96,8 +97,8 @@ class MatrixFactorization(object):
     def update_row_param_blockwise(self, y_csr, phi_csr, mu0, c, v, r_prev, u_prev):
 
         nrow = y_csr.shape[0]
-        prior_Phi = np.diag(np.hstack((self.prior_param['row_bias_prec'],
-                                       np.tile(self.prior_param['factor_prec'], self.num_factor))))
+        prior_Phi = np.diag(np.hstack((self.prior_param['row_bias_scale'] ** -2,
+                                       np.tile(self.prior_param['factor_scale'] ** -2, self.num_factor))))
         indptr = y_csr.indptr
         ru = [self.update_per_row(y_csr.data[indptr[i]:indptr[i+1]],
                                   phi_csr.data[indptr[i]:indptr[i+1]],
@@ -155,8 +156,8 @@ class MatrixFactorization(object):
     def update_col_param_blockwise(self, y_csc, phi_csc, mu0, r, u, c_prev, v_prev):
 
         ncol = y_csc.shape[1]
-        prior_Phi = np.diag(np.hstack((self.prior_param['col_bias_prec'],
-                                       np.tile(self.prior_param['factor_prec'], self.num_factor))))
+        prior_Phi = np.diag(np.hstack((self.prior_param['col_bias_scale'] ** -2,
+                                       np.tile(self.prior_param['factor_scale'] ** -2, self.num_factor))))
 
         indptr = y_csc.indptr
         cv = [self.update_per_col(y_csc.data[indptr[j]:indptr[j+1]],
@@ -227,10 +228,10 @@ class MatrixFactorization(object):
             # Compute the log posterior (with the weight parameter marginalized out)
             logp_samples[i] = - (self.prior_param['df'] + 1) / 2 * np.sum(
                 np.log(1 + (self.y_coo.data - mu) ** 2 * self.prior_param['weight'] / self.prior_param['df'])) + \
-                              - self.prior_param['col_bias_prec'] / 2 * np.sum(c ** 2) + \
-                              - self.prior_param['row_bias_prec'] / 2 * np.sum(v ** 2, (0, 1)) + \
-                              - self.prior_param['factor_prec']  / 2 * np.sum(r ** 2) + \
-                              - self.prior_param['factor_prec'] / 2 * np.sum(u ** 2, (0, 1))
+                              - self.prior_param['col_bias_scale'] ** -2 / 2 * np.sum(c ** 2) + \
+                              - self.prior_param['row_bias_scale'] ** -2 / 2 * np.sum(v ** 2, (0, 1)) + \
+                              - self.prior_param['factor_scale'] ** -2 / 2 * np.sum(r ** 2) + \
+                              - self.prior_param['factor_scale'] ** -2 / 2 * np.sum(u ** 2, (0, 1))
 
             if i >= n_burnin:
                 index = i - n_burnin
@@ -262,8 +263,8 @@ class MatrixFactorization(object):
 
         nrow = y_csr.shape[0]
         num_factor = v.shape[1]
-        prior_Phi = np.diag(np.hstack((self.prior_param['row_bias_prec'],
-                                       np.tile(self.prior_param['factor_prec'], num_factor))))
+        prior_Phi = np.diag(np.hstack((self.prior_param['row_bias_scale'] ** -2,
+                                       np.tile(self.prior_param['factor_scale'] ** -2, num_factor))))
 
         # Pre-allocate
         r = np.zeros(nrow)
@@ -298,8 +299,8 @@ class MatrixFactorization(object):
 
         ncol = y_csc.shape[1]
         num_factor = u.shape[1]
-        prior_Phi = np.diag(np.hstack((self.prior_param['col_bias_prec'],
-                                       np.tile(self.prior_param['factor_prec'], num_factor))))
+        prior_Phi = np.diag(np.hstack((self.prior_param['col_bias_scale'] ** -2,
+                                       np.tile(self.prior_param['factor_scale'] ** -2, num_factor))))
 
         # Pre-allocate
         c = np.zeros(ncol)
