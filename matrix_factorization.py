@@ -54,8 +54,8 @@ class MatrixFactorization(object):
         )
         logp_prior = \
             - self.prior_param['col_bias_scale'] ** -2 / 2 * np.sum(c ** 2) + \
-            - self.prior_param['row_bias_scale'] ** -2 / 2 * np.sum(v ** 2, (0, 1)) + \
-            - self.prior_param['factor_scale'] ** -2 / 2 * np.sum(r ** 2) + \
+            - self.prior_param['factor_scale'] ** -2 / 2 * np.sum(v ** 2, (0, 1)) + \
+            - self.prior_param['row_bias_scale'] ** -2 / 2 * np.sum(r ** 2) + \
             - self.prior_param['factor_scale'] ** -2 / 2 * np.sum(u ** 2, (0, 1))
         return loglik + logp_prior
 
