@@ -46,6 +46,25 @@ class MatrixFactorization(object):
         col_indices = np.array([col_id_map[id] for id in col_var])
         return scipy.sparse.coo_matrix((val, (row_indices, col_indices)), shape=(nrow, ncol))
 
+    def compute_logp(self, mu, r, u, c, v):
+        # This function computes the log posterior probability (with the weight
+        # parameter marginalized out).
+        loglik = - (self.prior_param['df'] + 1) / 2 * np.sum(
+            np.log( 1 + (self.y_coo.data - mu) ** 2 * self.prior_param['weight'] / self.prior_param['df'])
+        )
+        logp_prior = \
+            - self.prior_param['col_bias_scale'] ** -2 / 2 * np.sum(c ** 2) + \
+            - self.prior_param['row_bias_scale'] ** -2 / 2 * np.sum(v ** 2, (0, 1)) + \
+            - self.prior_param['factor_scale'] ** -2 / 2 * np.sum(r ** 2) + \
+            - self.prior_param['factor_scale'] ** -2 / 2 * np.sum(u ** 2, (0, 1))
+        return loglik + logp_prior
+
+    def compute_model_mean(self, I, J, mu0, r, u, c, v):
+        # Params:
+        # I - row indices
+        # J - column indices
+        return mu0 + r[I] + c[J] + np.sum(u[I,:] * v[J,:], 1)
+
     def gibbs(self, n_burnin, n_mcmc, n_update=100, num_process=1, seed=None, relaxation=-0.0):
 
         np.random.seed(seed)
@@ -108,19 +127,6 @@ class MatrixFactorization(object):
 
         return post_mean_mu, sample_dict
 
-    def compute_logp(self, mu, r, u, c, v):
-        # This function computes the log posterior probability (with the weight
-        # parameter marginalized out).
-        loglik = - (self.prior_param['df'] + 1) / 2 * np.sum(
-            np.log( 1 + (self.y_coo.data - mu) ** 2 * self.prior_param['weight'] / self.prior_param['df'])
-        )
-        logp_prior = \
-            - self.prior_param['col_bias_scale'] ** -2 / 2 * np.sum(c ** 2) + \
-            - self.prior_param['row_bias_scale'] ** -2 / 2 * np.sum(v ** 2, (0, 1)) + \
-            - self.prior_param['factor_scale'] ** -2 / 2 * np.sum(r ** 2) + \
-            - self.prior_param['factor_scale'] ** -2 / 2 * np.sum(u ** 2, (0, 1))
-        return loglik + logp_prior
-
     def update_intercept(self, phi, mu_wo_intercept):
 
         post_prec = np.sum(phi)
@@ -136,10 +142,7 @@ class MatrixFactorization(object):
         prior_shape = self.prior_param['df'] / 2
         prior_rate = self.prior_param['df'] / 2 / self.prior_param['weight']
 
-        i = self.y_coo.row
-        j = self.y_coo.col
-
-        mu = mu0 + r[i] + c[j] + np.sum(u[i, :] * v[j, :], 1)
+        mu = self.compute_model_mean(self.y_coo.row, self.y_coo.col, mu0, r, u, c, v)
         sq_error = (self.y_coo.data - mu) ** 2
         post_shape = prior_shape + 1 / 2
         post_rate = prior_rate + sq_error / 2
