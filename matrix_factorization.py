@@ -244,7 +244,7 @@ class MatrixFactorization(object):
 
             if ((i + 1) % n_iter_per_update) == 0:
                 print('{:d} iterations have been completed.'.format(i + 1))
-                print('The current log posterior is {:.3g}.'.format(logp_samples[i]))
+                print('The total increase in log posterior so far is {:.3g}.'.format(logp_samples[i] - logp_samples[0]))
 
         # Save outputs
         sample_dict = {
