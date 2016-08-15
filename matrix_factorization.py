@@ -46,6 +46,81 @@ class MatrixFactorization(object):
         col_indices = np.array([col_id_map[id] for id in col_var])
         return scipy.sparse.coo_matrix((val, (row_indices, col_indices)), shape=(nrow, ncol))
 
+    def gibbs(self, n_burnin, n_mcmc, n_update=100, num_process=1, seed=None, relaxation=-0.0):
+
+        np.random.seed(seed)
+        self.relaxation = relaxation  # Recovers the standard Gibbs sampler when relaxation = 0.
+
+        n_iter_per_update = max(1, math.floor((n_burnin + n_mcmc) / n_update))
+        nrow, ncol = self.y_coo.shape
+
+        # Pre-allocate
+        logp_samples = np.zeros(n_burnin + n_mcmc)
+        mu0_samples = np.zeros((n_mcmc, 1))
+        c_samples = np.zeros((ncol, n_mcmc))
+        v_samples = np.zeros((ncol, self.num_factor, n_mcmc))
+        r_samples = np.zeros((nrow, n_mcmc))
+        u_samples = np.zeros((nrow, self.num_factor, n_mcmc))
+        post_mean_mu = np.zeros(self.y_coo.nnz)
+
+        # Initial value
+        r = np.zeros(nrow)
+        u = np.zeros((nrow, self.num_factor))
+        c = np.zeros(ncol)
+        v = np.zeros((ncol, self.num_factor))
+        phi = self.prior_param['weight']
+        mu_wo_intercept = np.zeros(self.y_coo.nnz)
+
+        # Gibbs steps
+        for i in range(n_burnin + n_mcmc):
+
+            mu0 = self.update_intercept(phi, mu_wo_intercept)
+            phi_csr = scipy.sparse.csr_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
+            r, u = self.update_row_param(phi_csr, mu0, c, v, r, u, num_process)
+            phi_csc = scipy.sparse.csc_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
+            c, v = self.update_col_param(phi_csc, mu0, r, u, c, v, num_process)
+            phi, mu = self.update_weight_param(mu0, r, u, c, v)
+            mu_wo_intercept = mu - mu0
+            logp_samples[i] = self.compute_logp(mu, r, u, c, v)
+
+            if i >= n_burnin:
+                index = i - n_burnin
+                mu0_samples[index] = mu0
+                c_samples[:, index] = c
+                u_samples[:, :, index] = u
+                r_samples[:, index] = r
+                v_samples[:, :, index] = v
+                post_mean_mu = index / (index + 1) * post_mean_mu + 1 / (index + 1) * mu
+
+            if ((i + 1) % n_iter_per_update) == 0:
+                print('{:d} iterations have been completed.'.format(i + 1))
+                print('The total increase in log posterior so far is {:.3g}.'.format(logp_samples[i] - logp_samples[0]))
+
+        # Save outputs
+        sample_dict = {
+            'logp': logp_samples,
+            'mu0': mu0_samples,
+            'r': r_samples,
+            'u': u_samples,
+            'c': c_samples,
+            'v': v_samples
+        }
+
+        return post_mean_mu, sample_dict
+
+    def compute_logp(self, mu, r, u, c, v):
+        # This function computes the log posterior probability (with the weight
+        # parameter marginalized out).
+        loglik = - (self.prior_param['df'] + 1) / 2 * np.sum(
+            np.log( 1 + (self.y_coo.data - mu) ** 2 * self.prior_param['weight'] / self.prior_param['df'])
+        )
+        logp_prior = \
+            - self.prior_param['col_bias_scale'] ** -2 / 2 * np.sum(c ** 2) + \
+            - self.prior_param['row_bias_scale'] ** -2 / 2 * np.sum(v ** 2, (0, 1)) + \
+            - self.prior_param['factor_scale'] ** -2 / 2 * np.sum(r ** 2) + \
+            - self.prior_param['factor_scale'] ** -2 / 2 * np.sum(u ** 2, (0, 1))
+        return loglik + logp_prior
+
     def update_intercept(self, phi, mu_wo_intercept):
 
         post_prec = np.sum(phi)
@@ -189,74 +264,7 @@ class MatrixFactorization(object):
 
         return c_j, v_j
 
-    def gibbs(self, n_burnin, n_mcmc, n_update=100, num_process=1, seed=None, relaxation=-0.0):
 
-        np.random.seed(seed)
-        self.relaxation = relaxation  # Recovers the standard Gibbs sampler when relaxation = 0.
-
-        n_iter_per_update = max(1, math.floor((n_burnin + n_mcmc) / n_update))
-        nrow, ncol = self.y_coo.shape
-
-        # Pre-allocate
-        logp_samples = np.zeros(n_burnin + n_mcmc)
-        mu0_samples = np.zeros((n_mcmc, 1))
-        c_samples = np.zeros((ncol, n_mcmc))
-        v_samples = np.zeros((ncol, self.num_factor, n_mcmc))
-        r_samples = np.zeros((nrow, n_mcmc))
-        u_samples = np.zeros((nrow, self.num_factor, n_mcmc))
-        post_mean_mu = np.zeros(self.y_coo.nnz)
-
-        # Initial value
-        r = np.zeros(nrow)
-        u = np.zeros((nrow, self.num_factor))
-        c = np.zeros(ncol)
-        v = np.zeros((ncol, self.num_factor))
-        phi = self.prior_param['weight']
-        mu_wo_intercept = np.zeros(self.y_coo.nnz)
-
-        # Gibbs steps
-        for i in range(n_burnin + n_mcmc):
-
-            mu0 = self.update_intercept(phi, mu_wo_intercept)
-            phi_csr = scipy.sparse.csr_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
-            r, u = self.update_row_param(phi_csr, mu0, c, v, r, u, num_process)
-            phi_csc = scipy.sparse.csc_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
-            c, v = self.update_col_param(phi_csc, mu0, r, u, c, v, num_process)
-            phi, mu = self.update_weight_param(mu0, r, u, c, v)
-            mu_wo_intercept = mu - mu0
-
-            # Compute the log posterior (with the weight parameter marginalized out)
-            logp_samples[i] = - (self.prior_param['df'] + 1) / 2 * np.sum(
-                np.log(1 + (self.y_coo.data - mu) ** 2 * self.prior_param['weight'] / self.prior_param['df'])) + \
-                              - self.prior_param['col_bias_scale'] ** -2 / 2 * np.sum(c ** 2) + \
-                              - self.prior_param['row_bias_scale'] ** -2 / 2 * np.sum(v ** 2, (0, 1)) + \
-                              - self.prior_param['factor_scale'] ** -2 / 2 * np.sum(r ** 2) + \
-                              - self.prior_param['factor_scale'] ** -2 / 2 * np.sum(u ** 2, (0, 1))
-
-            if i >= n_burnin:
-                index = i - n_burnin
-                mu0_samples[index] = mu0
-                c_samples[:, index] = c
-                u_samples[:, :, index] = u
-                r_samples[:, index] = r
-                v_samples[:, :, index] = v
-                post_mean_mu = index / (index + 1) * post_mean_mu + 1 / (index + 1) * mu
-
-            if ((i + 1) % n_iter_per_update) == 0:
-                print('{:d} iterations have been completed.'.format(i + 1))
-                print('The total increase in log posterior so far is {:.3g}.'.format(logp_samples[i] - logp_samples[0]))
-
-        # Save outputs
-        sample_dict = {
-            'logp': logp_samples,
-            'mu0': mu0_samples,
-            'r': r_samples,
-            'u': u_samples,
-            'c': c_samples,
-            'v': v_samples
-        }
-
-        return post_mean_mu, sample_dict
 
     # Old functions for row and column parameter updates. Saved in case it is easier to cythonize.
     def for_loop_update_row_param_blockwise(self, y_csr, phi_csr, mu0, c, v, r_prev, u_prev):
