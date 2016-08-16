@@ -2,8 +2,10 @@ import numpy as np
 import scipy as scipy
 import scipy.linalg
 import scipy.sparse
+import scipy.stats
 import math
 import joblib
+
 import pdb # TODO: remove after debugging
 
 class MatrixFactorization(object):
@@ -22,8 +24,11 @@ class MatrixFactorization(object):
             'row_bias_scale': bias_scale,
             'factor_scale': factor_scale,
             'weight': weight,
-            'df': 5.0,
+            'obs_df': 5.0,
+            'param_df': 5.0,
+            'factor_prec': np.diag(np.tile(factor_scale ** -2, self.num_factor))
         }
+        self.prior_param['factor_cov'] = scipy.linalg.inv(self.prior_param['factor_prec'])
 
     @staticmethod
     def prepare_matrix(val, row_var, col_var):
@@ -50,14 +55,19 @@ class MatrixFactorization(object):
     def compute_logp(self, mu, r, u, c, v):
         # This function computes the log posterior probability (with the weight
         # parameter marginalized out).
-        loglik = - (self.prior_param['df'] + 1) / 2 * np.sum(
-            np.log( 1 + (self.y_coo.data - mu) ** 2 * self.prior_param['weight'] / self.prior_param['df'])
+        loglik = - (self.prior_param['obs_df'] + 1) / 2 * np.sum(
+            np.log( 1 + (self.y_coo.data - mu) ** 2 * self.prior_param['weight'] / self.prior_param['obs_df'])
         )
+
         logp_prior = \
             - self.prior_param['col_bias_scale'] ** -2 / 2 * np.sum(c ** 2) + \
-            - np.sum(np.dot(v, self.Phi_v) * v, (0, 1)) / 2 + \
+            - (self.prior_param['param_df'] + 1) / 2 * \
+                np.sum(np.log(1 + np.sum(np.dot(v, self.prior_param['factor_prec']) * v, 1))) + \
             - self.prior_param['row_bias_scale'] ** -2 / 2 * np.sum(r ** 2) + \
-            - np.sum(np.dot(u, self.Phi_u) * u, (0, 1)) / 2
+            - (self.prior_param['param_df'] + 1) / 2 * \
+                np.sum(np.log(1 + np.sum(np.dot(u, self.prior_param['factor_prec']) * u, 1)))
+        # np.sum(np.log(1 + self.prior_param['factor_scale'] ** - 2 * np.sum(v ** 2, 1)))
+        # np.sum(np.log(1 + self.prior_param['factor_scale'] ** - 2 * np.sum(u ** 2, 1)))
 
         return loglik + logp_prior
 
@@ -91,10 +101,8 @@ class MatrixFactorization(object):
         v = np.zeros((ncol, self.num_factor))
         phi = self.prior_param['weight']
         mu_wo_intercept = np.zeros(self.y_coo.nnz)
-        Phi_u = np.diag(np.tile(self.prior_param['factor_scale'] ** -2, self.num_factor))
-        Phi_v = np.diag(np.tile(self.prior_param['factor_scale'] ** -2, self.num_factor))
-        self.Phi_u = Phi_u
-        self.Phi_v = Phi_v
+        Phi_u = self.prior_param['factor_prec'].copy()
+        Phi_v = self.prior_param['factor_prec'].copy()
 
         # Gibbs steps
         for i in range(n_burnin + n_mcmc):
@@ -102,8 +110,10 @@ class MatrixFactorization(object):
             mu0 = self.update_intercept(phi, mu_wo_intercept)
             phi_csr = scipy.sparse.csr_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
             r, u = self.update_row_param(phi_csr, mu0, c, v, r, u, Phi_u, num_process)
+            Phi_u = self.update_row_factor_prec(u)
             phi_csc = scipy.sparse.csc_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
             c, v = self.update_col_param(phi_csc, mu0, r, u, c, v, Phi_v, num_process)
+            Phi_u = self.update_col_factor_prec(v)
             phi, mu = self.update_weight_param(mu0, r, u, c, v)
             mu_wo_intercept = mu - mu0
             logp_samples[i] = self.compute_logp(mu, r, u, c, v)
@@ -145,8 +155,8 @@ class MatrixFactorization(object):
         # Returns the weight parameters in an 1-D array in the row major order
         # and also the mean estimate of matrix factorization as a by-product.
 
-        prior_shape = self.prior_param['df'] / 2
-        prior_rate = self.prior_param['df'] / 2 / self.prior_param['weight']
+        prior_shape = self.prior_param['obs_df'] / 2
+        prior_rate = self.prior_param['obs_df'] / 2 / self.prior_param['weight']
 
         mu = self.compute_model_mean(self.y_coo.row, self.y_coo.col, mu0, r, u, c, v)
         sq_error = (self.y_coo.data - mu) ** 2
@@ -218,6 +228,13 @@ class MatrixFactorization(object):
 
         return r_i, u_i
 
+    def update_row_factor_prec(self, u):
+        prior_df = self.num_factor
+        post_df = u.shape[0] + prior_df
+        post_scale = scipy.linalg.inv(self.prior_param['factor_cov'] + np.dot(u.T, u))
+        Phi_u = scipy.stats.wishart.rvs(post_df, post_scale)
+        return Phi_u
+
     def update_col_param(self, phi_csc, mu0, r, u, c_prev, v_prev, Phi_v, num_process):
 
         ncol = self.y_csc.shape[1]
@@ -278,6 +295,13 @@ class MatrixFactorization(object):
         v_j = cv_j[1:]
 
         return c_j, v_j
+
+    def update_col_factor_prec(self, v):
+        prior_df = self.num_factor
+        post_df = v.shape[0] + prior_df
+        post_scale = scipy.linalg.inv(self.prior_param['factor_cov'] + np.dot(v.T, v))
+        Phi_v = scipy.stats.wishart.rvs(post_df, post_scale)
+        return Phi_v
 
 
 
