@@ -113,7 +113,7 @@ class MatrixFactorization(object):
             Phi_u = self.update_row_factor_prec(u)
             phi_csc = scipy.sparse.csc_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
             c, v = self.update_col_param(phi_csc, mu0, r, u, c, v, Phi_v, num_process)
-            Phi_u = self.update_col_factor_prec(v)
+            Phi_v = self.update_col_factor_prec(v)
             phi, mu = self.update_weight_param(mu0, r, u, c, v)
             mu_wo_intercept = mu - mu0
             logp_samples[i] = self.compute_logp(mu, r, u, c, v)
@@ -138,7 +138,7 @@ class MatrixFactorization(object):
             'r': r_samples,
             'u': u_samples,
             'c': c_samples,
-            'v': v_samples
+            'v': v_samples,
         }
 
         return post_mean_mu, sample_dict
