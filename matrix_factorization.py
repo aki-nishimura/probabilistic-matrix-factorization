@@ -26,7 +26,7 @@ class MatrixFactorization(object):
             'weight': weight,
             'obs_df': 5.0,
             'param_df': 5.0,
-            'factor_prec': np.diag(np.tile(factor_scale ** -2, self.num_factor))
+            'factor_prec': np.diag(np.tile(factor_scale ** -2, self.num_factor)) # Prior mean of Wishart.
         }
         self.prior_param['factor_cov'] = scipy.linalg.inv(self.prior_param['factor_prec'])
 
@@ -230,8 +230,10 @@ class MatrixFactorization(object):
 
     def update_row_factor_prec(self, u):
         prior_df = self.num_factor
+        # Set a prior scale matrix so that the prior mean is self.prior_param['factor_prec'].
+        prior_scale = self.prior_param['factor_prec'] / prior_df
         post_df = u.shape[0] + prior_df
-        post_scale = scipy.linalg.inv(self.prior_param['factor_cov'] + np.dot(u.T, u))
+        post_scale = scipy.linalg.inv(scipy.linalg.inv(prior_scale) + np.dot(u.T, u))
         Phi_u = scipy.stats.wishart.rvs(post_df, post_scale)
         return Phi_u
 
@@ -298,8 +300,10 @@ class MatrixFactorization(object):
 
     def update_col_factor_prec(self, v):
         prior_df = self.num_factor
+        # Set a prior scale matrix so that the prior mean is self.prior_param['factor_prec'].
+        prior_scale = self.prior_param['factor_prec'] / prior_df
         post_df = v.shape[0] + prior_df
-        post_scale = scipy.linalg.inv(self.prior_param['factor_cov'] + np.dot(v.T, v))
+        post_scale = scipy.linalg.inv(scipy.linalg.inv(prior_scale) + np.dot(v.T, v))
         Phi_v = scipy.stats.wishart.rvs(post_df, post_scale)
         return Phi_v
 
