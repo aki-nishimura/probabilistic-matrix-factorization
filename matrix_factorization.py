@@ -98,6 +98,10 @@ class MatrixFactorization(object):
         u_samples = np.zeros((nrow, self.num_factor, n_mcmc))
         post_mean_mu = np.zeros(self.y_coo.nnz)
 
+        # TODO: remove later.
+        phi_r_samples = np.zeros((nrow, n_mcmc))
+        phi_c_samples = np.zeros((ncol, n_mcmc))
+
         # These variables are used only if y_test_coo is not None.
         y_pred = 0
         y_pred_post_mean = 0
@@ -148,6 +152,9 @@ class MatrixFactorization(object):
                 v_samples[:, :, index] = v
                 post_mean_mu = index / (index + 1) * post_mean_mu + 1 / (index + 1) * mu
                 y_pred_post_mean = index / (index + 1) * y_pred_post_mean + 1 / (index + 1) * y_pred
+                # TODO: remove later.
+                phi_r_samples[:, index] = phi_r
+                phi_c_samples[:, index] = phi_c
 
         # Save outputs
         sample_dict = {
@@ -157,6 +164,8 @@ class MatrixFactorization(object):
             'u': u_samples,
             'c': c_samples,
             'v': v_samples,
+            'phi_r': phi_r_samples,
+            'phi_c': phi_c_samples
         }
         if y_test_coo is not None:
             sample_dict['rmse'] = rmse_samples
@@ -329,7 +338,7 @@ class MatrixFactorization(object):
 
     def update_row_bias_prec(self, r):
         prior_shape = self.prior_param['param_df'] / 2
-        prior_rate = self.prior_param['param_df'] / 2 / \
+        prior_rate = self.prior_param['param_df'] / 2 * \
                         self.prior_param['row_bias_scale'] ** 2
         post_shape = prior_shape + 1 / 2
         post_rate = prior_rate + r ** 2 / 2
@@ -338,7 +347,7 @@ class MatrixFactorization(object):
 
     def update_col_bias_prec(self, c):
         prior_shape = self.prior_param['param_df'] / 2
-        prior_rate = self.prior_param['param_df'] / 2 / \
+        prior_rate = self.prior_param['param_df'] / 2 * \
                         self.prior_param['col_bias_scale'] ** 2
         post_shape = prior_shape + 1 / 2
         post_rate = prior_rate + c ** 2 / 2
