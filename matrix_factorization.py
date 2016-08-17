@@ -59,11 +59,15 @@ class MatrixFactorization(object):
             np.log( 1 + (self.y_coo.data - mu) ** 2 * self.prior_param['weight'] / self.prior_param['obs_df'])
         )
 
+        c_scaled = c / self.prior_param['col_bias_scale']
+        r_scaled = r / self.prior_param['row_bias_scale']
         logp_prior = \
-            - self.prior_param['col_bias_scale'] ** -2 / 2 * np.sum(c ** 2) + \
+            - (self.prior_param['param_df'] + 1) / 2 * \
+                np.sum(np.log(1 + c_scaled ** 2 / self.prior_param['param_df'])) + \
             - (self.prior_param['param_df'] + 1) / 2 * \
                 np.sum(np.log(1 + np.sum(np.dot(v, self.prior_param['factor_prec']) * v, 1))) + \
-            - self.prior_param['row_bias_scale'] ** -2 / 2 * np.sum(r ** 2) + \
+            - (self.prior_param['param_df'] + 1) / 2 * \
+                np.sum(np.log(1 + r_scaled ** 2 / self.prior_param['param_df'])) + \
             - (self.prior_param['param_df'] + 1) / 2 * \
                 np.sum(np.log(1 + np.sum(np.dot(u, self.prior_param['factor_prec']) * u, 1)))
         # np.sum(np.log(1 + self.prior_param['factor_scale'] ** - 2 * np.sum(v ** 2, 1)))
@@ -109,29 +113,31 @@ class MatrixFactorization(object):
         c = np.zeros(ncol)
         v = np.zeros((ncol, self.num_factor))
         phi = self.prior_param['weight']
+        phi_r = np.tile(self.prior_param['row_bias_scale'] ** -2, nrow)
+        phi_c = np.tile(self.prior_param['col_bias_scale'] ** -2, ncol)
         Phi_u = self.prior_param['factor_prec'].copy()
         Phi_v = self.prior_param['factor_prec'].copy()
 
         # Gibbs steps
         for i in range(n_burnin + n_mcmc):
 
-            mu, mu0, r, u, c, v, Phi_u, Phi_v, phi = \
-                self.gibbs_onepass(mu, mu0, r, u, c, v, Phi_u, Phi_v, phi, num_process)
+            mu, mu0, r, u, c, v, phi_r, Phi_u, phi_c, Phi_v, phi = \
+                self.gibbs_onepass(mu, mu0, r, u, c, v, phi_r, Phi_u, phi_c, Phi_v, phi, num_process)
 
             logp_samples[i] = self.compute_logp(mu, r, u, c, v)
 
             if y_test_coo is not None:
                 y_pred = self.compute_model_mean(y_test_coo.row, y_test_coo.col, mu0, r, u, c, v)
-                rmse_samples[i] = math.sqrt(np.mean(weight_test * (y_pred - y_test_coo.data) ** 2))
+                rmse_samples[i] = math.sqrt(np.mean(weight_test * (y_pred - y_test_coo.data) ** 2) / np.mean(weight_test))
 
             if ((i + 1) % n_iter_per_update) == 0:
                 print('{:d} iterations have been completed.'.format(i + 1))
                 print('The total increase in log posterior so far is {:.3g}.'.format(logp_samples[i] - logp_samples[0]))
                 if y_test_coo is not None:
-                    print('The prediction error with the current parameter estimates is {:.3g}.'.format(rmse_samples[i]))
+                    print('The average prediction error with the current parameter estimates is {:.3g}.'.format(rmse_samples[i]))
                     if i >= n_burnin:
-                        test_err = math.sqrt(np.mean(weight_test * (y_test_coo.data - y_pred_post_mean) ** 2))
-                        print('The prediction error by the averaged estimate is {:.3g}.'.format(test_err))
+                        test_err = math.sqrt(np.mean(weight_test * (y_test_coo.data - y_pred_post_mean) ** 2) / np.mean(weight_test))
+                        print('The average prediction error by the averaged estimate is {:.3g}.'.format(test_err))
 
             if i >= n_burnin:
                 index = i - n_burnin
@@ -157,18 +163,20 @@ class MatrixFactorization(object):
 
         return post_mean_mu, sample_dict
 
-    def gibbs_onepass(self, mu, mu0, r, u, c, v, Phi_u, Phi_v, phi, num_process):
+    def gibbs_onepass(self, mu, mu0, r, u, c, v, phi_r, Phi_u, phi_c, Phi_v, phi, num_process):
 
         mu0 = self.update_intercept(phi, mu - mu0)
         phi_csr = scipy.sparse.csr_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
-        r, u = self.update_row_param(phi_csr, mu0, c, v, r, u, Phi_u, num_process)
+        r, u = self.update_row_param(phi_csr, mu0, c, v, r, u, phi_r, Phi_u, num_process)
         phi_csc = scipy.sparse.csc_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
-        c, v = self.update_col_param(phi_csc, mu0, r, u, c, v, Phi_v, num_process)
-        Phi_v = self.update_col_factor_prec(v)
-        Phi_u = self.update_row_factor_prec(u)
+        c, v = self.update_col_param(phi_csc, mu0, r, u, c, v, phi_c, Phi_v, num_process)
         phi, mu = self.update_weight_param(mu0, r, u, c, v)
+        phi_r = self.update_row_bias_prec(r)
+        Phi_u = self.update_row_factor_prec(u)
+        phi_c = self.update_col_bias_prec(c)
+        Phi_v = self.update_col_factor_prec(v)
 
-        return mu, mu0, r, u, c, v, Phi_u, Phi_v, phi
+        return mu, mu0, r, u, c, v, phi_r, Phi_u, phi_c, Phi_v, phi
 
     def update_intercept(self, phi, mu_wo_intercept):
 
@@ -193,13 +201,13 @@ class MatrixFactorization(object):
 
         return phi, mu
 
-    def update_row_param(self, phi_csr, mu0, c, v, r_prev, u_prev, Phi_u, num_process):
+    def update_row_param(self, phi_csr, mu0, c, v, r_prev, u_prev, phi_r, Phi_u, num_process):
 
         nrow = self.y_csr.shape[0]
 
         # Update 'c' and 'v' block-wise in parallel.
         if num_process == 1:
-            r, u = self.update_row_param_blockwise(self.y_csr, phi_csr, mu0, c, v, r_prev, u_prev, Phi_u)
+            r, u = self.update_row_param_blockwise(self.y_csr, phi_csr, mu0, c, v, r_prev, u_prev, phi_r, Phi_u)
         else:
             n_block = num_process
             block_ind = np.linspace(0, nrow, 1 + n_block, dtype=int)
@@ -210,6 +218,7 @@ class MatrixFactorization(object):
                     mu0, c, v,
                     r_prev[block_ind[m]:block_ind[m + 1]],
                     u_prev[block_ind[m]:block_ind[m + 1]],
+                    phi_r[block_ind[m]:block_ind[m + 1]],
                     Phi_u)
                 for m in range(n_block))
             r = np.concatenate([ru_i[0] for ru_i in ru])
@@ -217,28 +226,29 @@ class MatrixFactorization(object):
 
         return r, u
 
-    def update_row_param_blockwise(self, y_csr, phi_csr, mu0, c, v, r_prev, u_prev, Phi_u):
+    def update_row_param_blockwise(self, y_csr, phi_csr, mu0, c, v, r_prev, u_prev, phi_r, Phi_u):
 
         nrow = y_csr.shape[0]
-        prior_Phi = np.zeros((1 + self.num_factor, 1 + self.num_factor))
-        prior_Phi[0,0] = self.prior_param['row_bias_scale'] ** -2
-        prior_Phi[1:, 1:] = Phi_u
         indptr = y_csr.indptr
         ru = [self.update_per_row(y_csr.data[indptr[i]:indptr[i+1]],
                                   phi_csr.data[indptr[i]:indptr[i+1]],
                                   y_csr.indices[indptr[i]:indptr[i+1]],
-                                  mu0, c, v, r_prev[i], u_prev[i,:], prior_Phi) for i in range(nrow)]
+                                  mu0, c, v, r_prev[i], u_prev[i,:],
+                                  phi_r[i], Phi_u) for i in range(nrow)]
         r = np.array([ru_i[0] for ru_i in ru])
         u = np.vstack([ru_i[1] for ru_i in ru])
 
         return r, u
 
-    def update_per_row(self, y_i, phi_i, J, mu0, c, v, r_prev_i, u_prev_i, prior_Phi):
+    def update_per_row(self, y_i, phi_i, J, mu0, c, v, r_prev_i, u_prev_i, phi_r_i, Phi_u):
         # Params:
         #   J - column indices
 
         nnz_i = len(J)
         residual_i = y_i - mu0 - c[J]
+        prior_Phi = np.zeros((1 + self.num_factor, 1 + self.num_factor))
+        prior_Phi[0, 0] = phi_r_i
+        prior_Phi[1:, 1:] = Phi_u
         v_T = np.hstack((np.ones((nnz_i, 1)), v[J, :]))
         post_Phi_i = prior_Phi + \
                      np.dot(v_T.T,
@@ -255,21 +265,12 @@ class MatrixFactorization(object):
 
         return r_i, u_i
 
-    def update_row_factor_prec(self, u):
-        prior_df = self.num_factor
-        # Set a prior scale matrix so that the prior mean is self.prior_param['factor_prec'].
-        prior_scale = self.prior_param['factor_prec'] / prior_df
-        post_df = u.shape[0] + prior_df
-        post_scale = scipy.linalg.inv(scipy.linalg.inv(prior_scale) + np.dot(u.T, u))
-        Phi_u = scipy.stats.wishart.rvs(post_df, post_scale)
-        return Phi_u
-
-    def update_col_param(self, phi_csc, mu0, r, u, c_prev, v_prev, Phi_v, num_process):
+    def update_col_param(self, phi_csc, mu0, r, u, c_prev, v_prev, phi_c, Phi_v, num_process):
 
         ncol = self.y_csc.shape[1]
 
         if num_process == 1:
-            c, v = self.update_col_param_blockwise(self.y_csc, phi_csc, mu0, r, u, c_prev, v_prev, Phi_v)
+            c, v = self.update_col_param_blockwise(self.y_csc, phi_csc, mu0, r, u, c_prev, v_prev, phi_c, Phi_v)
         else:
             # Update 'c' and 'v' block-wise in parallel.
             n_block = num_process
@@ -281,6 +282,7 @@ class MatrixFactorization(object):
                     mu0, r, u,
                     c_prev[block_ind[m]:block_ind[m + 1]],
                     v_prev[block_ind[m]:block_ind[m + 1]],
+                    phi_c[block_ind[m]:block_ind[m + 1]],
                     Phi_v)
                 for m in range(n_block))
             c = np.concatenate([cv_j[0] for cv_j in cv])
@@ -288,25 +290,25 @@ class MatrixFactorization(object):
 
         return c, v
 
-    def update_col_param_blockwise(self, y_csc, phi_csc, mu0, r, u, c_prev, v_prev, Phi_v):
+    def update_col_param_blockwise(self, y_csc, phi_csc, mu0, r, u, c_prev, v_prev, phi_c, Phi_v):
 
         ncol = y_csc.shape[1]
-        prior_Phi = np.zeros((1 + self.num_factor, 1 + self.num_factor))
-        prior_Phi[0, 0] = self.prior_param['row_bias_scale'] ** -2
-        prior_Phi[1:, 1:] = Phi_v
-
         indptr = y_csc.indptr
         cv = [self.update_per_col(y_csc.data[indptr[j]:indptr[j+1]],
                                   phi_csc.data[indptr[j]:indptr[j+1]],
                                   y_csc.indices[indptr[j]:indptr[j+1]],
-                                  mu0, r, u, c_prev[j], v_prev[j,:], prior_Phi) for j in range(ncol)]
+                                  mu0, r, u, c_prev[j], v_prev[j,:],
+                                  phi_c[j], Phi_v) for j in range(ncol)]
         c = np.array([cv_j[0] for cv_j in cv])
         v = np.vstack([cv_j[1] for cv_j in cv])
 
         return c, v
 
-    def update_per_col(self, y_j, phi_j, I, mu0, r, u, c_prev_j, v_prev_j, prior_Phi):
+    def update_per_col(self, y_j, phi_j, I, mu0, r, u, c_prev_j, v_prev_j, phi_c_j, Phi_v):
 
+        prior_Phi = np.zeros((1 + self.num_factor, 1 + self.num_factor))
+        prior_Phi[0, 0] = phi_c_j
+        prior_Phi[1:, 1:] = Phi_v
         nnz_j = len(I)
         residual_j = y_j - mu0 - r[I]
         u_T = np.hstack((np.ones((nnz_j, 1)), u[I, :]))
@@ -325,6 +327,32 @@ class MatrixFactorization(object):
 
         return c_j, v_j
 
+    def update_row_bias_prec(self, r):
+        prior_shape = self.prior_param['param_df'] / 2
+        prior_rate = self.prior_param['param_df'] / 2
+        post_shape = prior_shape + 1 / 2
+        post_rate = prior_rate + r ** 2 / 2
+        phi_r = np.random.gamma(post_shape, 1 / post_rate)
+        return phi_r
+
+    def update_col_bias_prec(self, c):
+        prior_shape = self.prior_param['param_df'] / 2
+        prior_rate = self.prior_param['param_df'] / 2
+        post_shape = prior_shape + 1 / 2
+        post_rate = prior_rate + c ** 2 / 2
+        phi_c = np.random.gamma(post_shape, 1 / post_rate)
+        return phi_c
+
+    def update_row_factor_prec(self, u):
+        prior_df = self.num_factor
+        # Set a prior scale matrix so that the prior mean is self.prior_param['factor_prec'].
+        prior_scale = self.prior_param['factor_prec'] / prior_df
+        post_df = u.shape[0] + prior_df
+        post_scale = scipy.linalg.inv(
+            scipy.linalg.inv(prior_scale) + np.dot(u.T, u))
+        Phi_u = scipy.stats.wishart.rvs(post_df, post_scale)
+        return Phi_u
+
     def update_col_factor_prec(self, v):
         prior_df = self.num_factor
         # Set a prior scale matrix so that the prior mean is self.prior_param['factor_prec'].
@@ -333,8 +361,6 @@ class MatrixFactorization(object):
         post_scale = scipy.linalg.inv(scipy.linalg.inv(prior_scale) + np.dot(v.T, v))
         Phi_v = scipy.stats.wishart.rvs(post_df, post_scale)
         return Phi_v
-
-
 
     # Old functions for row and column parameter updates. Saved in case it is easier to cythonize.
     def for_loop_update_row_param_blockwise(self, y_csr, phi_csr, mu0, c, v, r_prev, u_prev):
