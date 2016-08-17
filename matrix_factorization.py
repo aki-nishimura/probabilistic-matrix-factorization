@@ -329,7 +329,8 @@ class MatrixFactorization(object):
 
     def update_row_bias_prec(self, r):
         prior_shape = self.prior_param['param_df'] / 2
-        prior_rate = self.prior_param['param_df'] / 2
+        prior_rate = self.prior_param['param_df'] / 2 / \
+                        self.prior_param['row_bias_scale'] ** 2
         post_shape = prior_shape + 1 / 2
         post_rate = prior_rate + r ** 2 / 2
         phi_r = np.random.gamma(post_shape, 1 / post_rate)
@@ -337,7 +338,8 @@ class MatrixFactorization(object):
 
     def update_col_bias_prec(self, c):
         prior_shape = self.prior_param['param_df'] / 2
-        prior_rate = self.prior_param['param_df'] / 2
+        prior_rate = self.prior_param['param_df'] / 2 / \
+                        self.prior_param['col_bias_scale'] ** 2
         post_shape = prior_shape + 1 / 2
         post_rate = prior_rate + c ** 2 / 2
         phi_c = np.random.gamma(post_shape, 1 / post_rate)
