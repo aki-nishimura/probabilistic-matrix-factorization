@@ -90,27 +90,33 @@ class MatrixFactorization(object):
             weight_test = np.ones(y_test_coo.data.size)
 
         # Initial value
+        mu = np.zeros(self.y_coo.nnz)
+        mu0 = 0  # Only the difference mu - mu0 matters as the initial input to Gibbs.
         r = np.zeros(nrow)
         u = np.zeros((nrow, self.num_factor))
         c = np.zeros(ncol)
         v = np.zeros((ncol, self.num_factor))
         phi = self.prior_param['weight']
-        mu_wo_intercept = np.zeros(self.y_coo.nnz)
 
         # Gibbs steps
         for i in range(n_burnin + n_mcmc):
 
-            mu0 = self.update_intercept(phi, mu_wo_intercept)
-            phi_csr = scipy.sparse.csr_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
-            r, u = self.update_row_param(phi_csr, mu0, c, v, r, u, num_process)
-            phi_csc = scipy.sparse.csc_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
-            c, v = self.update_col_param(phi_csc, mu0, r, u, c, v, num_process)
-            phi, mu = self.update_weight_param(mu0, r, u, c, v)
-            mu_wo_intercept = mu - mu0
+            mu, mu0, r, u, c, v, phi = \
+                self.gibbs_onepass(mu, mu0, r, u, c, v, phi, num_process)
+
             logp_samples[i] = self.compute_logp(mu, r, u, c, v)
             if y_test_coo is not None:
                 y_pred = self.compute_model_mean(y_test_coo.row, y_test_coo.col, mu0, r, u, c, v)
                 rmse_samples[i] = math.sqrt(np.mean(weight_test * (y_pred - y_test_coo.data) ** 2))
+
+            if ((i + 1) % n_iter_per_update) == 0:
+                print('{:d} iterations have been completed.'.format(i + 1))
+                print('The total increase in log posterior so far is {:.3g}.'.format(logp_samples[i] - logp_samples[0]))
+                if y_test_coo is not None:
+                    print('The prediction error with the current parameter estimates is {:.3g}.'.format(rmse_samples[i]))
+                    if i >= n_burnin:
+                        test_err = math.sqrt(np.mean(weight_test * (y_test_coo.data - y_pred_post_mean) ** 2))
+                        print('The prediction error by the averaged estimate is {:.3g}.'.format(test_err))
 
             if i >= n_burnin:
                 index = i - n_burnin
@@ -121,15 +127,6 @@ class MatrixFactorization(object):
                 v_samples[:, :, index] = v
                 post_mean_mu = index / (index + 1) * post_mean_mu + 1 / (index + 1) * mu
                 y_pred_post_mean = index / (index + 1) * y_pred_post_mean + 1 / (index + 1) * y_pred
-
-            if ((i + 1) % n_iter_per_update) == 0:
-                print('{:d} iterations have been completed.'.format(i + 1))
-                print('The total increase in log posterior so far is {:.3g}.'.format(logp_samples[i] - logp_samples[0]))
-                if y_test_coo is not None:
-                    print('The prediction error with the current parameter estimates is {:.3g}.'.format(rmse_samples[i]))
-                    if i >= n_burnin:
-                        test_err = math.sqrt(np.mean(weight_test * (y_test_coo.data - y_pred_post_mean) ** 2))
-                        print('The prediction error by the averaged estimate is {:.3g}.'.format(test_err))
 
         # Save outputs
         sample_dict = {
@@ -144,6 +141,17 @@ class MatrixFactorization(object):
             sample_dict['rmse'] = rmse_samples
 
         return post_mean_mu, sample_dict
+
+    def gibbs_onepass(self, mu, mu0, r, u, c, v, phi, num_process):
+
+        mu0 = self.update_intercept(phi, mu - mu0)
+        phi_csr = scipy.sparse.csr_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
+        r, u = self.update_row_param(phi_csr, mu0, c, v, r, u, num_process)
+        phi_csc = scipy.sparse.csc_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
+        c, v = self.update_col_param(phi_csc, mu0, r, u, c, v, num_process)
+        phi, mu = self.update_weight_param(mu0, r, u, c, v)
+
+        return mu, mu0, r, u, c, v, phi
 
     def update_intercept(self, phi, mu_wo_intercept):
 
