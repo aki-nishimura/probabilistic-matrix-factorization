@@ -58,7 +58,7 @@ class MatrixFactorization(object):
         # This function computes the log posterior probability (with the weight
         # parameter marginalized out).
         loglik = - (self.prior_param['obs_df'] + 1) / 2 * np.sum(
-            np.log( 1 + (self.y_coo.data - mu) ** 2 * self.prior_param['weight'] / self.prior_param['obs_df'])
+            np.log( 1 + (self.y_coo.data - mu) ** 2 * self.prior_param['weight'] * psi / self.prior_param['obs_df'])
         )
 
         c_scaled = c / self.prior_param['col_bias_scale']
