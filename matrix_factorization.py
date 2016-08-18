@@ -24,6 +24,8 @@ class MatrixFactorization(object):
             'row_bias_scale': bias_scale,
             'factor_scale': factor_scale,
             'weight': weight,
+            'global_prec_shape': 1,
+            'global_prec_rate': 1,
             'obs_df': 5.0,
             'param_df': 5.0,
             'factor_prec': np.diag(np.tile(factor_scale ** -2, self.num_factor)) # Prior mean of Wishart.
@@ -52,7 +54,7 @@ class MatrixFactorization(object):
         col_indices = np.array([col_id_map[id] for id in col_var])
         return scipy.sparse.coo_matrix((val, (row_indices, col_indices)), shape=(nrow, ncol))
 
-    def compute_logp(self, mu, r, u, c, v):
+    def compute_logp(self, mu, r, u, c, v, psi):
         # This function computes the log posterior probability (with the weight
         # parameter marginalized out).
         loglik = - (self.prior_param['obs_df'] + 1) / 2 * np.sum(
@@ -69,7 +71,9 @@ class MatrixFactorization(object):
             - (self.prior_param['param_df'] + 1) / 2 * \
                 np.sum(np.log(1 + r_scaled ** 2 / self.prior_param['param_df'])) + \
             - (self.prior_param['param_df'] + 1) / 2 * \
-                np.sum(np.log(1 + np.sum(np.dot(u, self.prior_param['factor_prec']) * u, 1)))
+                np.sum(np.log(1 + np.sum(np.dot(u, self.prior_param['factor_prec']) * u, 1))) \
+            + (self.prior_param['global_prec_shape'] - 1) * math.log(psi) \
+                - self.prior_param['global_prec_rate'] * psi
         # np.sum(np.log(1 + self.prior_param['factor_scale'] ** - 2 * np.sum(v ** 2, 1)))
         # np.sum(np.log(1 + self.prior_param['factor_scale'] ** - 2 * np.sum(u ** 2, 1)))
         return loglik + logp_prior
@@ -96,11 +100,13 @@ class MatrixFactorization(object):
         v_samples = np.zeros((ncol, self.num_factor, n_mcmc))
         r_samples = np.zeros((nrow, n_mcmc))
         u_samples = np.zeros((nrow, self.num_factor, n_mcmc))
+        psi_samples = np.zeros(n_mcmc)
         post_mean_mu = np.zeros(self.y_coo.nnz)
 
         # TODO: remove later.
         phi_r_samples = np.zeros((nrow, n_mcmc))
         phi_c_samples = np.zeros((ncol, n_mcmc))
+        phi_samples = np.zeros((self.y_coo.nnz, n_mcmc))
 
         # These variables are used only if y_test_coo is not None.
         y_pred = 0
@@ -121,14 +127,15 @@ class MatrixFactorization(object):
         phi_c = np.tile(self.prior_param['col_bias_scale'] ** -2, ncol)
         Phi_u = self.prior_param['factor_prec'].copy()
         Phi_v = self.prior_param['factor_prec'].copy()
+        psi = self.prior_param['global_prec_shape'] / self.prior_param['global_prec_rate']
 
         # Gibbs steps
         for i in range(n_burnin + n_mcmc):
 
-            mu, mu0, r, u, c, v, phi_r, Phi_u, phi_c, Phi_v, phi = \
-                self.gibbs_onepass(mu, mu0, r, u, c, v, phi_r, Phi_u, phi_c, Phi_v, phi, num_process)
+            mu, mu0, r, u, c, v, phi_r, Phi_u, phi_c, Phi_v, phi, psi = \
+                self.gibbs_onepass(mu, mu0, r, u, c, v, phi_r, Phi_u, phi_c, Phi_v, phi, psi, num_process)
 
-            logp_samples[i] = self.compute_logp(mu, r, u, c, v)
+            logp_samples[i] = self.compute_logp(mu, r, u, c, v, psi)
 
             if y_test_coo is not None:
                 y_pred = self.compute_model_mean(y_test_coo.row, y_test_coo.col, mu0, r, u, c, v)
@@ -150,11 +157,13 @@ class MatrixFactorization(object):
                 u_samples[:, :, index] = u
                 r_samples[:, index] = r
                 v_samples[:, :, index] = v
+                psi_samples[index] = psi
                 post_mean_mu = index / (index + 1) * post_mean_mu + 1 / (index + 1) * mu
                 y_pred_post_mean = index / (index + 1) * y_pred_post_mean + 1 / (index + 1) * y_pred
                 # TODO: remove later.
                 phi_r_samples[:, index] = phi_r
                 phi_c_samples[:, index] = phi_c
+                phi_samples[:, index] = phi
 
         # Save outputs
         sample_dict = {
@@ -164,28 +173,31 @@ class MatrixFactorization(object):
             'u': u_samples,
             'c': c_samples,
             'v': v_samples,
+            'psi': psi_samples,
             'phi_r': phi_r_samples,
-            'phi_c': phi_c_samples
+            'phi_c': phi_c_samples,
+            'phi': phi_samples
         }
         if y_test_coo is not None:
             sample_dict['rmse'] = rmse_samples
 
         return post_mean_mu, sample_dict
 
-    def gibbs_onepass(self, mu, mu0, r, u, c, v, phi_r, Phi_u, phi_c, Phi_v, phi, num_process):
+    def gibbs_onepass(self, mu, mu0, r, u, c, v, phi_r, Phi_u, phi_c, Phi_v, phi, psi, num_process):
 
-        mu0 = self.update_intercept(phi, mu - mu0)
-        phi_csr = scipy.sparse.csr_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
+        mu0 = self.update_intercept(psi * phi, mu - mu0)
+        phi_csr = scipy.sparse.csr_matrix((psi * phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
         r, u = self.update_row_param(phi_csr, mu0, c, v, r, u, phi_r, Phi_u, num_process)
-        phi_csc = scipy.sparse.csc_matrix((phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
+        phi_csc = scipy.sparse.csc_matrix((psi * phi, (self.y_coo.row, self.y_coo.col)), self.y_coo.shape)
         c, v = self.update_col_param(phi_csc, mu0, r, u, c, v, phi_c, Phi_v, num_process)
-        phi, mu = self.update_weight_param(mu0, r, u, c, v)
+        phi, mu = self.update_weight_param(mu0, r, u, c, v, psi)
+        psi = self.update_global_prec_param(mu, phi)
         phi_r = self.update_row_bias_prec(r)
         Phi_u = self.update_row_factor_prec(u)
         phi_c = self.update_col_bias_prec(c)
         Phi_v = self.update_col_factor_prec(v)
 
-        return mu, mu0, r, u, c, v, phi_r, Phi_u, phi_c, Phi_v, phi
+        return mu, mu0, r, u, c, v, phi_r, Phi_u, phi_c, Phi_v, phi, psi
 
     def update_intercept(self, phi, mu_wo_intercept):
 
@@ -195,7 +207,7 @@ class MatrixFactorization(object):
         mu0 = np.random.normal(post_mean, 1 / math.sqrt(post_prec))
         return mu0
 
-    def update_weight_param(self, mu0, r, u, c, v):
+    def update_weight_param(self, mu0, r, u, c, v, psi):
         # Returns the weight parameters in an 1-D array in the row major order
         # and also the mean estimate of matrix factorization as a by-product.
 
@@ -205,10 +217,21 @@ class MatrixFactorization(object):
         mu = self.compute_model_mean(self.y_coo.row, self.y_coo.col, mu0, r, u, c, v)
         sq_error = (self.y_coo.data - mu) ** 2
         post_shape = prior_shape + 1 / 2
-        post_rate = prior_rate + sq_error / 2
+        post_rate = prior_rate + psi * sq_error / 2
         phi = np.random.gamma(post_shape, 1 / post_rate)
 
         return phi, mu
+
+    def update_global_prec_param(self, mu, phi):
+
+        prior_shape = self.prior_param['global_prec_shape']
+        prior_rate = self.prior_param['global_prec_rate']
+        residual = self.y_coo.data - mu
+        post_shape = prior_shape + mu.size / 2
+        post_rate = prior_rate + np.sum(phi * residual ** 2) / 2
+        psi = np.random.gamma(post_shape, 1 / post_rate)
+
+        return psi
 
     def update_row_param(self, phi_csr, mu0, c, v, r_prev, u_prev, phi_r, Phi_u, num_process):
 
