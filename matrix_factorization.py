@@ -84,6 +84,15 @@ class MatrixFactorization(object):
         # J - column indices
         return mu0 + r[I] + c[J] + np.sum(u[I,:] * v[J,:], 1)
 
+    def compute_mu_sample(self, I, J, sample_dict, burnin=0):
+        # Paramas:
+        # burnin - the number of samples to discard.
+        mu_sample = \
+            np.tile(sample_dict['mu0'][burnin:], (len(I), 1)) + \
+            sample_dict['r'][I, burnin:] + sample_dict['c'][J, burnin:] + \
+            np.sum(sample_dict['u'][I, :, burnin:] * sample_dict['v'][J, :, burnin:], 1)
+        return mu_sample
+
     def gibbs(self, n_burnin, n_mcmc, n_update=100, num_process=1, y_test_coo=None, weight_test=None, seed=None, relaxation=-0.0):
 
         np.random.seed(seed)
@@ -95,7 +104,7 @@ class MatrixFactorization(object):
 
         # Pre-allocate
         logp_samples = np.zeros(n_burnin + n_mcmc)
-        mu0_samples = np.zeros((n_mcmc, 1))
+        mu0_samples = np.zeros(n_mcmc)
         c_samples = np.zeros((ncol, n_mcmc))
         v_samples = np.zeros((ncol, self.num_factor, n_mcmc))
         r_samples = np.zeros((nrow, n_mcmc))
