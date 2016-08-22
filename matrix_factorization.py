@@ -7,14 +7,18 @@ import joblib
 
 class MatrixFactorization(object):
 
-    def __init__(self, y_coo, num_factor, bias_scale, factor_scale, weight=None):
+    def __init__(self, val, row_id_var, col_id_var, num_factor, bias_scale, factor_scale, weight=None):
+        # Params:
+        # val, row_id_var, col_id_var: numpy arrays
 
         if weight is None:
-            weight = np.ones(y_coo.data.size)
+            weight = np.ones(val.size)
 
-        self.y_coo = y_coo
-        self.y_csr = scipy.sparse.csr_matrix(y_coo)
-        self.y_csc = scipy.sparse.csc_matrix(y_coo)
+        self.y_coo, self.row_id_map, self.col_id_map \
+            = self.prepare_matrix(val, row_id_var, col_id_var)
+
+        self.y_csr = scipy.sparse.csr_matrix(self.y_coo)
+        self.y_csc = scipy.sparse.csc_matrix(self.y_coo)
         self.num_factor = num_factor
         self.prior_param = {
             'col_bias_scale': bias_scale,
@@ -24,17 +28,12 @@ class MatrixFactorization(object):
             'df': 5.0,
         }
 
-    @staticmethod
-    def prepare_matrix(val, row_var, col_var):
+    def prepare_matrix(self, val, row_id_var, col_id_var):
         # Takes a vector of observed values and two categorical variables
-        # and returns a sparse matrix in coo format that can be used to
-        # instantiate the class.
-        #
-        # Params:
-        # val, row_var, col_var: numpy arrays
+        # and returns a sparse matrix in coo format.
 
-        row_id = row_var.unique()
-        col_id = col_var.unique()
+        row_id = np.unique(row_id_var) 
+        col_id = np.unique(col_id_var)
         nrow = row_id.size
         ncol = col_id.size
 
@@ -42,9 +41,11 @@ class MatrixFactorization(object):
         row_id_map = {row_id[index]: index for index in range(len(row_id))}
         col_id_map = {col_id[index]: index for index in range(len(col_id))}
 
-        row_indices = np.array([row_id_map[id] for id in row_var])
-        col_indices = np.array([col_id_map[id] for id in col_var])
-        return scipy.sparse.coo_matrix((val, (row_indices, col_indices)), shape=(nrow, ncol))
+        row_indices = np.array([row_id_map[id] for id in row_id_var])
+        col_indices = np.array([col_id_map[id] for id in col_id_var])
+        y_coo = scipy.sparse.coo_matrix((val, (row_indices, col_indices)), shape=(nrow, ncol))
+
+        return y_coo, row_id_map, col_id_map
 
     def compute_logp(self, mu, r, u, c, v):
         # This function computes the log posterior probability (with the weight
@@ -65,13 +66,32 @@ class MatrixFactorization(object):
         # J - column indices
         return mu0 + r[I] + c[J] + np.sum(u[I,:] * v[J,:], 1)
 
-    def compute_mu_sample(self, I, J, sample_dict, burnin=0):
-        # Paramas:
+    def compute_model_mean_sample(self, row_id, col_id, sample_dict, burnin=0):
+        # Params:
         # burnin - the number of samples to discard.
-        mu_sample = \
+        #
+        # Returns:
+        # mu_sample - numpy array whose second axis corresponds to posterior samples
+        #   of model mean.
+        row_exist = np.array([(id in self.row_id_map) for id in row_id])
+        col_exist = np.array([(id in self.col_id_map) for id in col_id])
+        was_matched = np.logical_and(row_exist, col_exist)
+        I = np.array([self.row_id_map[row_id[i]] for i in range(len(row_id)) if was_matched[i]])
+        J = np.array([self.col_id_map[col_id[j]] for j in range(len(col_id)) if was_matched[j]])
+
+        mu_sample = np.zeros((len(row_id), len(sample_dict['mu0'][burnin:])))
+        mu_sample[~was_matched, :] = np.nan
+        mu_sample[was_matched, :] = \
             np.tile(sample_dict['mu0'][burnin:], (len(I), 1)) + \
             sample_dict['r'][I, burnin:] + sample_dict['c'][J, burnin:] + \
             np.sum(sample_dict['u'][I, :, burnin:] * sample_dict['v'][J, :, burnin:], 1)
+
+        if not np.all(was_matched):
+            print('Only {:.3g} percent of the categories could be matched with the trained matrix'.format(
+                100 * np.mean(was_matched)
+            ))
+            print("NaN indicates the unmatched rows.")
+
         return mu_sample
 
     def gibbs(self, n_burnin, n_mcmc, n_update=100, num_process=1, y_test_coo=None, weight_test=None, seed=None, relaxation=-0.0):
