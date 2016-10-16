@@ -25,8 +25,8 @@ class MatrixFactorization(object):
             'weight': weight,
             'global_prec_shape': 2,
             'global_prec_rate': 1,
-            'obs_df': 5.0,
-            'param_df': 5.0,
+            'obs_df': float('inf'),
+            'param_df': float('inf'),
         }
 
     @staticmethod
@@ -54,23 +54,33 @@ class MatrixFactorization(object):
     def compute_logp(self, mu, r, u, c, v):
         # This function computes the log posterior probability (with the weight
         # parameter marginalized out).
-        loglik = - (self.prior_param['obs_df'] + 1) / 2 * np.sum(
-            np.log( 1 + (self.y_coo.data - mu) ** 2 * self.prior_param['weight'] / self.prior_param['obs_df'])
-        )
+        if math.isinf(self.prior_param['obs_df']):
+            loglik = - np.sum((self.y_coo.data - mu) ** 2 * self.prior_param['weight'])/ 2
+        else:
+            loglik = - (self.prior_param['obs_df'] + 1) / 2 * np.sum(
+                np.log( 1 + (self.y_coo.data - mu) ** 2 * self.prior_param['weight'] / self.prior_param['obs_df'])
+            )
 
         r_scaled = r / self.prior_param['row_bias_scale']
         c_scaled = c / self.prior_param['col_bias_scale']
         u_scaled = u / np.tile(self.prior_param['factor_scale'], (u.shape[0], 1))
         v_scaled = v / np.tile(self.prior_param['factor_scale'], (v.shape[0], 1))
-        logp_prior = \
-            - (self.prior_param['param_df'] + 1) / 2 * \
-                np.sum(np.log(1 + r_scaled ** 2 / self.prior_param['param_df'])) + \
-            - (self.prior_param['param_df'] + 1) / 2 * \
-                np.sum(np.log(1 + v_scaled ** 2 / self.prior_param['param_df']), (0, 1)) + \
-            - (self.prior_param['param_df'] + 1) / 2 * \
-                np.sum(np.log(1 + c_scaled ** 2 / self.prior_param['param_df'])) + \
-            - (self.prior_param['param_df'] + 1) / 2 * \
-                np.sum(np.log(1 + u_scaled ** 2 / self.prior_param['param_df']), (0, 1))
+        if math.isinf(self.prior_param['param_df']):
+            logp_prior = \
+                - np.sum(r_scaled ** 2) / 2 + \
+                - np.sum(u_scaled ** 2, (0, 1)) / 2 + \
+                - np.sum(c_scaled ** 2) / 2 + \
+                - np.sum(v_scaled ** 2, (0, 1)) / 2
+        else:
+            logp_prior = \
+                - (self.prior_param['param_df'] + 1) / 2 * \
+                    np.sum(np.log(1 + r_scaled ** 2 / self.prior_param['param_df'])) + \
+                - (self.prior_param['param_df'] + 1) / 2 * \
+                    np.sum(np.log(1 + u_scaled ** 2 / self.prior_param['param_df']), (0, 1)) + \
+                - (self.prior_param['param_df'] + 1) / 2 * \
+                    np.sum(np.log(1 + c_scaled ** 2 / self.prior_param['param_df'])) + \
+                - (self.prior_param['param_df'] + 1) / 2 * \
+                    np.sum(np.log(1 + v_scaled ** 2 / self.prior_param['param_df']), (0, 1))
 
         return loglik + logp_prior
 
@@ -191,14 +201,17 @@ class MatrixFactorization(object):
         # Returns the weight parameters in an 1-D array in the row major order
         # and also the mean estimate of matrix factorization as a by-product.
 
-        prior_shape = self.prior_param['obs_df'] / 2
-        prior_rate = self.prior_param['obs_df'] / 2 / self.prior_param['weight']
-
         mu = self.compute_model_mean(self.y_coo.row, self.y_coo.col, mu0, r, u, c, v)
-        sq_error = (self.y_coo.data - mu) ** 2
-        post_shape = prior_shape + 1 / 2
-        post_rate = prior_rate + sq_error / 2
-        phi = np.random.gamma(post_shape, 1 / post_rate)
+
+        if math.isinf(self.prior_param['obs_df']):
+            phi = self.prior_param['weight']
+        else:
+            prior_shape = self.prior_param['obs_df'] / 2
+            prior_rate = self.prior_param['obs_df'] / 2 / self.prior_param['weight']
+            sq_error = (self.y_coo.data - mu) ** 2
+            post_shape = prior_shape + 1 / 2
+            post_rate = prior_rate + sq_error / 2
+            phi = np.random.gamma(post_shape, 1 / post_rate)
 
         return phi, mu
 
@@ -325,39 +338,51 @@ class MatrixFactorization(object):
         return c_j, v_j
 
     def update_row_bias_prec(self, r):
-        prior_shape = self.prior_param['param_df'] / 2
-        prior_rate = self.prior_param['param_df'] / 2 * \
-                        self.prior_param['row_bias_scale'] ** 2
-        post_shape = prior_shape + 1 / 2
-        post_rate = prior_rate + r ** 2 / 2
-        phi_r = np.random.gamma(post_shape, 1 / post_rate)
+        if math.isinf(self.prior_param['param_df']):
+            phi_r = np.tile(self.prior_param['row_bias_scale'] ** -2, len(r))
+        else:
+            prior_shape = self.prior_param['param_df'] / 2
+            prior_rate = self.prior_param['param_df'] / 2 * \
+                            self.prior_param['row_bias_scale'] ** 2
+            post_shape = prior_shape + 1 / 2
+            post_rate = prior_rate + r ** 2 / 2
+            phi_r = np.random.gamma(post_shape, 1 / post_rate)
         return phi_r
 
     def update_col_bias_prec(self, c):
-        prior_shape = self.prior_param['param_df'] / 2
-        prior_rate = self.prior_param['param_df'] / 2 * \
-                        self.prior_param['col_bias_scale'] ** 2
-        post_shape = prior_shape + 1 / 2
-        post_rate = prior_rate + c ** 2 / 2
-        phi_c = np.random.gamma(post_shape, 1 / post_rate)
+        if math.isinf(self.prior_param['param_df']):
+            phi_c = np.tile(self.prior_param['col_bias_scale'] ** -2, len(c))
+        else:
+            prior_shape = self.prior_param['param_df'] / 2
+            prior_rate = self.prior_param['param_df'] / 2 * \
+                            self.prior_param['col_bias_scale'] ** 2
+            post_shape = prior_shape + 1 / 2
+            post_rate = prior_rate + c ** 2 / 2
+            phi_c = np.random.gamma(post_shape, 1 / post_rate)
         return phi_c
 
     def update_row_factor_prec(self, u):
-        prior_shape = self.prior_param['param_df'] / 2
-        prior_rate = self.prior_param['param_df'] / 2 * \
-                        self.prior_param['factor_scale'] ** 2
-        post_shape = prior_shape + u.shape[0] / 2
-        post_rate = prior_rate + np.sum(u ** 2, 0) / 2
-        phi_u = np.random.gamma(post_shape, 1 / post_rate)
+        if math.isinf(self.prior_param['param_df']):
+            phi_u = self.prior_param['factor_scale'] ** -2
+        else:
+            prior_shape = self.prior_param['param_df'] / 2
+            prior_rate = self.prior_param['param_df'] / 2 * \
+                            self.prior_param['factor_scale'] ** 2
+            post_shape = prior_shape + u.shape[0] / 2
+            post_rate = prior_rate + np.sum(u ** 2, 0) / 2
+            phi_u = np.random.gamma(post_shape, 1 / post_rate)
         return phi_u
 
     def update_col_factor_prec(self, v):
-        prior_shape = self.prior_param['param_df'] / 2
-        prior_rate = self.prior_param['param_df'] / 2 * \
-                        self.prior_param['factor_scale'] ** 2
-        post_shape = prior_shape + v.shape[0] / 2
-        post_rate = prior_rate + np.sum(v ** 2, 0) / 2
-        phi_v = np.random.gamma(post_shape, 1 / post_rate)
+        if math.isinf(self.prior_param['param_df']):
+            phi_v = self.prior_param['factor_scale'] ** -2
+        else:
+            prior_shape = self.prior_param['param_df'] / 2
+            prior_rate = self.prior_param['param_df'] / 2 * \
+                            self.prior_param['factor_scale'] ** 2
+            post_shape = prior_shape + v.shape[0] / 2
+            post_rate = prior_rate + np.sum(v ** 2, 0) / 2
+            phi_v = np.random.gamma(post_shape, 1 / post_rate)
         return phi_v
 
     # Old functions for row and column parameter updates. Saved in case it is easier to cythonize.
