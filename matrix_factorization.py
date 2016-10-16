@@ -5,7 +5,6 @@ import scipy.sparse
 import scipy.stats
 import math
 import joblib
-import pdb # TODO: remove after debugging
 
 class MatrixFactorization(object):
 
@@ -88,13 +87,14 @@ class MatrixFactorization(object):
         # J - column indices
         return mu0 + r[I] + c[J] + np.sum(u[I,:] * v[J,:], 1)
 
-    def compute_mu_sample(self, I, J, sample_dict, burnin=0):
+    def compute_model_mean_sample(self, I, J, sample_dict, burnin=0):
         # Paramas:
         # burnin - the number of samples to discard.
         mu_sample = \
             np.tile(sample_dict['mu0'][burnin:], (len(I), 1)) + \
             sample_dict['r'][I, burnin:] + sample_dict['c'][J, burnin:] + \
             np.sum(sample_dict['u'][I, :, burnin:] * sample_dict['v'][J, :, burnin:], 1)
+
         return mu_sample
 
     def gibbs(self, n_burnin, n_mcmc, n_update=100, num_process=1, seed=None, relaxation=-0.0):
@@ -114,11 +114,6 @@ class MatrixFactorization(object):
         r_samples = np.zeros((nrow, n_mcmc))
         u_samples = np.zeros((nrow, self.num_factor, n_mcmc))
         post_mean_mu = np.zeros(self.y_coo.nnz)
-
-        # TODO: remove later.
-        phi_u_samples = np.zeros((self.num_factor, n_mcmc))
-        phi_v_samples = np.zeros((self.num_factor, n_mcmc))
-        phi_samples = np.zeros((self.y_coo.nnz, n_mcmc))
 
         # Initial value
         mu = np.zeros(self.y_coo.nnz)
@@ -142,7 +137,7 @@ class MatrixFactorization(object):
 
             if ((i + 1) % n_iter_per_update) == 0:
                 print('{:d} iterations have been completed.'.format(i + 1))
-                print('The total increase in log posterior so far is {:.3g}.'.format(logp_samples[i] - logp_samples[0]))
+                print('The log posterior density has increased by {:.3g} from the initial value so far.'.format(logp_samples[i] - logp_samples[0]))
 
             if i >= n_burnin:
                 index = i - n_burnin
@@ -152,10 +147,7 @@ class MatrixFactorization(object):
                 r_samples[:, index] = r
                 v_samples[:, :, index] = v
                 post_mean_mu = index / (index + 1) * post_mean_mu + 1 / (index + 1) * mu
-                # TODO: remove later.
-                phi_u_samples[:, index] = phi_u
-                phi_v_samples[:, index] = phi_v
-                phi_samples[:, index] = phi
+
 
         # Save outputs
         sample_dict = {
@@ -165,9 +157,7 @@ class MatrixFactorization(object):
             'u': u_samples,
             'c': c_samples,
             'v': v_samples,
-            'phi_u': phi_u_samples,
-            'phi_v': phi_v_samples,
-            'phi': phi_samples}
+        }
 
         return post_mean_mu, sample_dict
 
