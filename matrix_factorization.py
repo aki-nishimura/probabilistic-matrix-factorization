@@ -89,7 +89,7 @@ class MatrixFactorization(object):
             np.sum(sample_dict['u'][I, :, burnin:] * sample_dict['v'][J, :, burnin:], 1)
         return mu_sample
 
-    def gibbs(self, n_burnin, n_mcmc, n_update=100, num_process=1, y_test_coo=None, weight_test=None, seed=None, relaxation=-0.0):
+    def gibbs(self, n_burnin, n_mcmc, n_update=100, num_process=1, seed=None, relaxation=-0.0):
 
         np.random.seed(seed)
         # TODO: pass 'relaxation' as a local parameter if we decide to keep it.
@@ -112,13 +112,6 @@ class MatrixFactorization(object):
         phi_v_samples = np.zeros((self.num_factor, n_mcmc))
         phi_samples = np.zeros((self.y_coo.nnz, n_mcmc))
 
-        # These variables are used only if y_test_coo is not None.
-        y_pred = 0
-        y_pred_post_mean = 0
-        rmse_samples = np.zeros(n_burnin + n_mcmc)
-        if (y_test_coo is not None) and (weight_test is None):
-            weight_test = np.ones(y_test_coo.data.size)
-
         # Initial value
         mu = np.zeros(self.y_coo.nnz)
         mu0 = 0 # Only the difference mu - mu0 matters as the initial input to Gibbs.
@@ -139,18 +132,9 @@ class MatrixFactorization(object):
 
             logp_samples[i] = self.compute_logp(mu, r, u, c, v)
 
-            if y_test_coo is not None:
-                y_pred = self.compute_model_mean(y_test_coo.row, y_test_coo.col, mu0, r, u, c, v)
-                rmse_samples[i] = math.sqrt(np.mean(weight_test * (y_pred - y_test_coo.data) ** 2) / np.mean(weight_test))
-
             if ((i + 1) % n_iter_per_update) == 0:
                 print('{:d} iterations have been completed.'.format(i + 1))
                 print('The total increase in log posterior so far is {:.3g}.'.format(logp_samples[i] - logp_samples[0]))
-                if y_test_coo is not None:
-                    print('The average prediction error with the current parameter estimates is {:.3g}.'.format(rmse_samples[i]))
-                    if i >= n_burnin:
-                        test_err = math.sqrt(np.mean(weight_test * (y_test_coo.data - y_pred_post_mean) ** 2) / np.mean(weight_test))
-                        print('The average prediction error by the averaged estimate is {:.3g}.'.format(test_err))
 
             if i >= n_burnin:
                 index = i - n_burnin
@@ -160,11 +144,11 @@ class MatrixFactorization(object):
                 r_samples[:, index] = r
                 v_samples[:, :, index] = v
                 post_mean_mu = index / (index + 1) * post_mean_mu + 1 / (index + 1) * mu
-                y_pred_post_mean = index / (index + 1) * y_pred_post_mean + 1 / (index + 1) * y_pred
                 # TODO: remove later.
                 phi_u_samples[:, index] = phi_u
                 phi_v_samples[:, index] = phi_v
                 phi_samples[:, index] = phi
+
         # Save outputs
         sample_dict = {
             'logp': logp_samples,
@@ -175,10 +159,7 @@ class MatrixFactorization(object):
             'v': v_samples,
             'phi_u': phi_u_samples,
             'phi_v': phi_v_samples,
-            'phi': phi_samples
-        }
-        if y_test_coo is not None:
-            sample_dict['rmse'] = rmse_samples
+            'phi': phi_samples}
 
         return post_mean_mu, sample_dict
 
