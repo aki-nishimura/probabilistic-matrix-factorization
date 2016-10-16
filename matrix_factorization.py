@@ -23,8 +23,6 @@ class MatrixFactorization(object):
             'row_bias_scale': bias_scale,
             'factor_scale': np.tile(factor_scale, self.num_factor),
             'weight': weight,
-            'global_prec_shape': 2,
-            'global_prec_rate': 1,
             'obs_df': float('inf'),
             'param_df': float('inf'),
         }
