@@ -91,10 +91,9 @@ class MatrixFactorization(object):
         return mu0 + r[I] + c[J] + np.sum(u[I,:] * v[J,:], 1)
 
     def compute_model_mean_sample(self, I, J, sample_dict, burnin=0):
-        # Paramas:
+        # Params:
         # burnin - the number of samples to discard.
         mu_sample = \
-            np.tile(sample_dict['mu0'][burnin:], (len(I), 1)) + \
             sample_dict['r'][I, burnin:] + sample_dict['c'][J, burnin:] + \
             np.sum(sample_dict['u'][I, :, burnin:] * sample_dict['v'][J, :, burnin:], 1)
 
@@ -120,6 +119,7 @@ class MatrixFactorization(object):
 
         # Initial value
         mu = np.zeros(self.y_coo.nnz)
+        # TODO: Remove 'mu0' entirely from the module.
         mu0 = 0 # Only the difference mu - mu0 matters as the initial input to Gibbs.
         r = np.zeros(nrow)
         u = np.zeros((nrow, self.num_factor))
@@ -144,7 +144,6 @@ class MatrixFactorization(object):
 
             if i >= n_burnin:
                 index = i - n_burnin
-                mu0_samples[index] = mu0
                 c_samples[:, index] = c
                 u_samples[:, :, index] = u
                 r_samples[:, index] = r
@@ -155,7 +154,6 @@ class MatrixFactorization(object):
         # Save outputs
         sample_dict = {
             'logp': logp_samples,
-            'mu0': mu0_samples,
             'r': r_samples,
             'u': u_samples,
             'c': c_samples,
@@ -184,7 +182,7 @@ class MatrixFactorization(object):
         post_prec = np.sum(phi)
         residual = self.y_coo.data - mu_wo_intercept
         post_mean = np.sum(phi * residual) / post_prec
-        mu0 = np.random.normal(post_mean, 1 / math.sqrt(post_prec))
+        mu0 = 0 # np.random.normal(post_mean, 1 / math.sqrt(post_prec))
         return mu0
 
 
