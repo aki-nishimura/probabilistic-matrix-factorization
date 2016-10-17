@@ -90,12 +90,14 @@ class MatrixFactorization(object):
         # J - column indices
         return mu0 + r[I] + c[J] + np.sum(u[I,:] * v[J,:], 1)
 
-    def compute_model_mean_sample(self, I, J, sample_dict, burnin=0):
+    def compute_model_mean_sample(self, I, J, sample_dict, thin=1, n_discard=0):
         # Params:
-        # burnin - the number of samples to discard.
+        # thin - subsampling rate of MCMC samples
+        # n_discard - the number of samples to discard in addition to the
+        #     'n_burnin' specified in the Gibbs sampler.
         mu_sample = \
-            sample_dict['r'][I, burnin:] + sample_dict['c'][J, burnin:] + \
-            np.sum(sample_dict['u'][I, :, burnin:] * sample_dict['v'][J, :, burnin:], 1)
+            sample_dict['r'][I, n_discard:(-1):thin] + sample_dict['c'][J, n_discard:(-1):thin] + \
+            np.sum(sample_dict['u'][I, :, n_discard:(-1):thin] * sample_dict['v'][J, :, n_discard:(-1):thin], 1)
 
         return mu_sample
 
