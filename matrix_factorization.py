@@ -30,7 +30,8 @@ class MatrixFactorization(object):
     def prepare_matrix(val, row_var, col_var):
         # Takes a vector of observed values and two categorical variables
         # and returns a sparse matrix in coo format that can be used to
-        # instantiate the class.
+        # instantiate the class. Also returned are dictionaries that maps the
+        # row and column categories to indices of a matrix
         #
         # Params:
         # val, row_var, col_var: numpy arrays
@@ -46,7 +47,9 @@ class MatrixFactorization(object):
 
         row_indices = np.array([row_id_map[id] for id in row_var])
         col_indices = np.array([col_id_map[id] for id in col_var])
-        return scipy.sparse.coo_matrix((val, (row_indices, col_indices)), shape=(nrow, ncol))
+        y_coo = scipy.sparse.coo_matrix((val, (row_indices, col_indices)), shape=(nrow, ncol))
+
+        return y_coo, row_id_map, col_id_map
 
     def compute_logp(self, mu, r, u, c, v):
         # This function computes the log posterior probability (with the weight
